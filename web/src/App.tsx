@@ -269,7 +269,7 @@ function App() {
 
   type DragInfo = {
     id: string
-    mode: 'move' | 'trim-start' | 'trim-end'
+    mode: 'move' | 'trim-start' | 'trim-end' | 'slip' | 'slide'
     startX: number
     origStart: number
     origDuration: number
@@ -649,8 +649,8 @@ function App() {
     const offsetX = e.clientX - rect.left
     const handleZone = 10
     let mode: DragInfo['mode'] = 'move'
-    if (offsetX < handleZone) mode = 'trim-start'
-    else if (offsetX > rect.width - handleZone) mode = 'trim-end'
+    if (offsetX < handleZone) mode = e.altKey ? 'slip' : 'trim-start'
+    else if (offsetX > rect.width - handleZone) mode = e.altKey ? 'slide' : 'trim-end'
 
     dragRef.current = {
       id: clip.id,
@@ -758,6 +758,35 @@ function App() {
             }
             candidate = clampTime(candidate)
             return { ...c, start: candidate }
+          }
+          if (mode === 'slip') {
+            // Move media in/out without changing clip position/duration
+            const slipAmount = deltaSec
+            const newStart = clampTime(origStart)
+            return { ...c, start: newStart, duration: origDuration } // visual stays; media offset not yet modeled
+          }
+          if (mode === 'slide') {
+            // Slide keeps length, moves clip while pushing/pulling neighbors on same track
+            let candidate = clampTime(origStart + deltaSec)
+            const prevSibling = siblings.filter(s => s.start + s.duration <= origStart).at(-1)
+            const nextSibling = siblings.find(s => s.start >= origStart)
+            if (!allowOverlap) {
+              if (prevSibling && candidate < prevSibling.start + prevSibling.duration) {
+                candidate = prevSibling.start + prevSibling.duration + 0.01
+              }
+              if (nextSibling && candidate + c.duration > nextSibling.start) {
+                candidate = Math.max(0, nextSibling.start - c.duration - 0.01)
+              }
+            }
+            const deltaSlide = candidate - origStart
+            updatedClips = updatedClips.map(o => {
+              if (o.id === c.id) return { ...o, start: candidate }
+              if (o.track !== trackId) return o
+              if (prevSibling && o.id === prevSibling.id) return { ...o, duration: Math.max(MIN_CLIP, o.duration + deltaSlide) }
+              if (nextSibling && o.id === nextSibling.id) return { ...o, start: clampTime(o.start + deltaSlide), duration: Math.max(MIN_CLIP, o.duration - deltaSlide) }
+              return o
+            })
+            return updatedClips.find(o => o.id === id) as Clip
           }
           if (mode === 'trim-start') {
             const prevSibling = siblings.filter(s => s.start + s.duration <= origStart).at(-1)
