@@ -116,8 +116,8 @@ const decodeWaveform = async (file: File): Promise<number[] | null> => {
     const ctx = new AudioContext({ sampleRate: 48000 })
     const audio = await ctx.decodeAudioData(buffer)
     const channel = audio.getChannelData(0)
-    const buckets = 64
-    const step = Math.floor(channel.length / buckets)
+    const buckets = Math.min(256, Math.max(64, Math.floor(channel.length / 6000)))
+    const step = Math.max(1, Math.floor(channel.length / buckets))
     const samples: number[] = []
     for (let i = 0; i < buckets; i++) {
       let sum = 0
@@ -243,6 +243,7 @@ function App() {
   const [loopEnabled, setLoopEnabled] = useState(false)
   const [loopRange, setLoopRange] = useState<{ start: number; end: number }>({ start: 0, end: 8 })
   const [assets, setAssets] = useState<Asset[]>([])
+  const [trackHeightScale, setTrackHeightScale] = useState(1)
   const [exportPreset, setExportPreset] = useState<'json' | 'mp4' | 'webm'>('json')
   const [isRendering, setIsRendering] = useState(false)
   const { state: project, set: setProject, undo, redo, canUndo, canRedo, pushCheckpoint } = useHistoryState<ProjectState>(
@@ -945,6 +946,17 @@ function App() {
             <button disabled={!canUndo} onClick={undo}>⌘Z Undo</button>
             <button disabled={!canRedo} onClick={redo}>⇧⌘Z Redo</button>
           </div>
+          <div className="pill">
+            Track height
+            <input
+              type="range"
+              min={0.6}
+              max={1.5}
+              step={0.05}
+              value={trackHeightScale}
+              onChange={(e) => setTrackHeightScale(parseFloat(e.target.value))}
+            />
+          </div>
           <label className="pill">
             <input type="checkbox" checked={allowOverlap} onChange={(e) => setAllowOverlap(e.target.checked)} />
             Allow overlap
@@ -1106,7 +1118,11 @@ function App() {
                   <div className="snap-ghost" style={{ left: snap.position * pxPerSec }} data-label={snap.label || ''} />
                 )}
                 {tracks.map((track, tIndex) => (
-                  <div key={track.id} className="track-row">
+                  <div
+                    key={track.id}
+                    className="track-row"
+                    style={{ ['--track-height' as string]: `${(track.height === 'compact' ? 48 : 70) * trackHeightScale}px` }}
+                  >
                     <div className="track-label">
                       <span className="badge">{track.type === 'video' ? 'V' : 'A'}</span>
                       {track.name}
@@ -1234,9 +1250,16 @@ function App() {
                           <span>{clip.title}</span>
                           {isAudio && clip.waveform && (
                             <div className="clip-wave">
-                              {clip.waveform.map((v, idx) => (
-                                <span key={idx} style={{ height: `${Math.max(6, v * 28)}px` }} />
-                              ))}
+                              {(() => {
+                                const bars = Math.max(16, Math.min(clip.waveform.length, Math.floor(clip.waveform.length * zoom / 1.2)))
+                                const step = Math.max(1, Math.floor(clip.waveform.length / bars))
+                                return clip.waveform
+                                  .filter((_, i) => i % step === 0)
+                                  .slice(0, bars)
+                                  .map((v, idx) => (
+                                    <span key={idx} style={{ height: `${Math.max(6, v * 28)}px` }} />
+                                  ))
+                              })()}
                             </div>
                           )}
                         </div>
