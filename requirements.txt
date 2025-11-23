@@ -1,0 +1,6 @@
+PySide6
+moviepy
+pandas
+pillow
+proglog
+opencv-python-headless
