@@ -14,10 +14,11 @@
 - [ ] GPU-accelerated decoding (NVDEC/VAAPI/DXVA) or efficient wasm fallback.
 - [ ] Continuous preroll/cache for scrubbing; smart proxy/offline handling.
 - [ ] Robust timing: drop-frame/ND timecode, fps setting applied to timeline math.
+  - [>] Track-aware playback: mute/solo/lock respected for audio/video; still needs multi-stream decode.
 
 ## Timeline operations
 - [ ] Trim modes (ripple/roll/slip/slide) with proper gap handling.
-- [ ] Clip linking (A/V), group/ungroup, disable/enable, lock/mute/solo per track.
+- [>] Clip controls: per-track mute/solo/lock landed; linking/grouping/disable still pending.
 - [ ] Nested sequences/subclips.
 - [ ] Snapping refinements: edges/markers/gaps with configurable strength.
 - [ ] Marquee multi-select respects track targeting; duplicate/paste maintains relative offsets.
