@@ -69,6 +69,9 @@ body {
   font-weight: 700;
 }
 
+.muted { color: #9fb0cc; }
+.small { font-size: 12px; }
+
 .transport button {
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -147,6 +150,35 @@ body {
   justify-content: space-between;
   gap: 8px;
   align-items: center;
+}
+
+.asset-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.asset-thumb {
+  width: 120px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.waveform {
+  display: grid;
+  grid-auto-flow: column;
+  gap: 2px;
+  align-items: end;
+  height: 28px;
+}
+
+.waveform span {
+  display: block;
+  width: 2px;
+  background: linear-gradient(180deg, #22d3ee, #0ea5e9);
+  border-radius: 2px;
 }
 
 .asset-actions {
@@ -262,6 +294,30 @@ body {
   background: rgba(34, 211, 238, 0.8);
   box-shadow: 0 0 0 5px rgba(34, 211, 238, 0.18);
   pointer-events: none;
+}
+
+.loop-range {
+  position: absolute;
+  top: 4px;
+  height: calc(100% - 8px);
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px dashed rgba(251, 191, 36, 0.4);
+  border-radius: 10px;
+  pointer-events: none;
+}
+
+.loop-range::after {
+  content: attr(data-label);
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 2px 8px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(251, 191, 36, 0.6);
+  border-radius: 6px;
+  color: #fef3c7;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .track-row {

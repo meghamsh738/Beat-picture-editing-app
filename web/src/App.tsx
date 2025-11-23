@@ -35,7 +35,15 @@ type DragHandle = null | 'loop-start' | 'loop-end'
 
 type SnapPoint = { time: number; label: string }
 
-type Asset = { id: string; name: string; type: string; duration: number }
+type Asset = {
+  id: string
+  name: string
+  type: string
+  duration: number
+  url?: string
+  waveform?: number[]
+  thumb?: string
+}
 
 const DEFAULT_TRACKS: Track[] = [
   { id: 'v1', name: 'V1 · Motion', type: 'video' },
@@ -64,6 +72,63 @@ const TOTAL_DURATION = 18
 const GRID_STEP = 0.25
 const SNAP_THRESHOLD_SEC = 0.12
 const MIN_CLIP = 0.2
+const ZOOM_MIN = 0.6
+const ZOOM_MAX = 3
+const VIEW_PADDING_PX = 60
+
+const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
+
+const loadMediaDuration = (file: File): Promise<number> => new Promise(resolve => {
+  try {
+    const url = URL.createObjectURL(file)
+    const media = document.createElement(file.type.startsWith('audio') ? 'audio' : 'video')
+    media.preload = 'metadata'
+    media.src = url
+    media.onloadedmetadata = () => {
+      const dur = media.duration
+      URL.revokeObjectURL(url)
+      if (!Number.isFinite(dur)) return resolve(5)
+      resolve(clamp(dur, 0.5, 120))
+    }
+    media.onerror = () => resolve(5)
+  } catch (err) {
+    resolve(5)
+  }
+})
+
+const decodeWaveform = async (file: File): Promise<number[] | null> => {
+  if (typeof window === 'undefined' || typeof AudioContext === 'undefined') return null
+  try {
+    const buffer = await file.arrayBuffer()
+    const ctx = new AudioContext({ sampleRate: 48000 })
+    const audio = await ctx.decodeAudioData(buffer)
+    const channel = audio.getChannelData(0)
+    const buckets = 64
+    const step = Math.floor(channel.length / buckets)
+    const samples: number[] = []
+    for (let i = 0; i < buckets; i++) {
+      let sum = 0
+      for (let j = 0; j < step; j++) {
+        const v = channel[i * step + j]
+        sum += Math.abs(v)
+      }
+      samples.push(sum / step)
+    }
+    const max = Math.max(...samples, 0.001)
+    return samples.map(s => s / max)
+  } catch (err) {
+    console.warn('waveform decode failed', err)
+    return null
+  }
+}
+
+const loadThumb = (file: File): Promise<string | null> => new Promise(resolve => {
+  if (!file.type.startsWith('image')) return resolve(null)
+  const reader = new FileReader()
+  reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null)
+  reader.onerror = () => resolve(null)
+  reader.readAsDataURL(file)
+})
 
 const STORAGE_KEY = 'timeline-builder-project-v1'
 
@@ -127,9 +192,12 @@ function App() {
   const [zoom, setZoom] = useState(1.4) // multiplier for px/sec
   const [playing, setPlaying] = useState(false)
   const [allowOverlap, setAllowOverlap] = useState(false)
+  const [rippleEdit, setRippleEdit] = useState(false)
   const [loopEnabled, setLoopEnabled] = useState(false)
   const [loopRange, setLoopRange] = useState<{ start: number; end: number }>({ start: 0, end: 8 })
   const [assets, setAssets] = useState<Asset[]>([])
+  const [exportPreset, setExportPreset] = useState<'json' | 'mp4' | 'webm'>('json')
+  const [isRendering, setIsRendering] = useState(false)
   const { state: project, set: setProject, undo, redo, canUndo, canRedo, pushCheckpoint } = useHistoryState<ProjectState>(
     { tracks: DEFAULT_TRACKS, clips: DEFAULT_CLIPS, markers: DEFAULT_MARKERS }
   )
@@ -276,9 +344,19 @@ function App() {
   const collectSnapPoints = (trackId: string, excludeId?: string): SnapPoint[] => {
     const pts: SnapPoint[] = []
     markers.forEach(m => pts.push({ time: m.time, label: `Marker · ${m.label}` }))
-    clips.filter(c => c.track === trackId && c.id !== excludeId).forEach(c => {
+    const trackClips = clips.filter(c => c.track === trackId && c.id !== excludeId).sort((a, b) => a.start - b.start)
+    trackClips.forEach((c, idx) => {
       pts.push({ time: c.start, label: `Edge · ${c.title}` })
       pts.push({ time: c.start + c.duration, label: `Edge · ${c.title}` })
+      const prev = trackClips[idx - 1]
+      if (prev) {
+        const gapStart = prev.start + prev.duration
+        const gapEnd = c.start
+        if (gapEnd - gapStart >= MIN_CLIP * 0.8) {
+          pts.push({ time: gapStart, label: 'Gap start' })
+          pts.push({ time: gapEnd, label: 'Gap end' })
+        }
+      }
     })
     for (let t = 0; t <= TOTAL_DURATION; t += GRID_STEP) pts.push({ time: Number(t.toFixed(3)), label: 'Grid' })
     return pts
@@ -317,16 +395,31 @@ function App() {
     setPlayhead(clampTime(m.time))
   }
 
-  const handleAssetUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAssetUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || [])
     if (!files.length) return
-    const next = files.map((f, idx) => ({
-      id: `${Date.now()}-${idx}-${f.name}`,
+    const now = Date.now()
+    const stubAssets: Asset[] = files.map((f, idx) => ({
+      id: `${now}-${idx}-${f.name}`,
       name: f.name,
       type: f.type || 'unknown',
-      duration: Math.max(3, Math.min(20, f.size / 1_000_000)) // naive duration guess
+      duration: Math.max(3, Math.min(20, f.size / 1_000_000)),
+      url: URL.createObjectURL(f)
     }))
-    setAssets(prev => [...prev, ...next])
+    setAssets(prev => [...prev, ...stubAssets])
+
+    // Enrich metadata async (duration, thumb, waveform)
+    for (const stub of stubAssets) {
+      const file = files.find(f => stub.id.startsWith(String(now)) && stub.name === f.name)
+      if (!file) continue
+      const [duration, waveform, thumb] = await Promise.all([
+        file.type.startsWith('audio') || file.type.startsWith('video') ? loadMediaDuration(file) : Promise.resolve(stub.duration),
+        file.type.startsWith('audio') ? decodeWaveform(file) : Promise.resolve(null),
+        loadThumb(file)
+      ])
+      setAssets(prev => prev.map(a => a.id === stub.id ? { ...a, duration, waveform: waveform ?? a.waveform, thumb: thumb ?? a.thumb } : a))
+    }
+
     e.target.value = ''
   }
 
@@ -384,6 +477,20 @@ function App() {
     scroller.addEventListener('scroll', onScroll)
     return () => scroller.removeEventListener('scroll', onScroll)
   }, [pxPerSec])
+
+  useEffect(() => {
+    const scroller = timelineRef.current?.parentElement
+    if (!scroller) return
+    const startPx = loopRange.start * pxPerSec
+    const endPx = loopRange.end * pxPerSec
+    const viewStart = scroller.scrollLeft
+    const viewEnd = scroller.scrollLeft + scroller.clientWidth
+    if (startPx < viewStart + VIEW_PADDING_PX) {
+      scroller.scrollLeft = Math.max(0, startPx - VIEW_PADDING_PX)
+    } else if (endPx > viewEnd - VIEW_PADDING_PX) {
+      scroller.scrollLeft = Math.max(0, endPx - scroller.clientWidth + VIEW_PADDING_PX)
+    }
+  }, [loopRange, pxPerSec])
 
   const startClipDrag = (e: React.MouseEvent<HTMLDivElement>, clip: Clip) => {
     const rect = e.currentTarget.getBoundingClientRect()
@@ -480,9 +587,8 @@ function App() {
         .filter(c => c.track === trackId && c.id !== id)
         .sort((a, b) => a.start - b.start)
       const minDur = MIN_CLIP
-      setProject(prev => ({
-        ...prev,
-        clips: prev.clips.map(c => {
+      setProject(prev => {
+        let updatedClips = prev.clips.map(c => {
           if (c.id !== id) return c
           if (mode === 'move') {
             let candidate = clampTime(origStart + deltaSec)
@@ -520,7 +626,31 @@ function App() {
           newDur = Math.max(minDur, snappedEnd - origStart)
           return { ...c, duration: newDur }
         })
-      }), { push: false })
+
+        // ripple shift downstream clips to maintain gap continuity
+        const moved = updatedClips.find(c => c.id === id)
+        if (rippleEdit && moved) {
+          const delta = moved.start - origStart
+          const deltaDur = moved.duration - origDuration
+          updatedClips = updatedClips.map(c => {
+            if (c.id === id || c.track !== trackId) return c
+            if (mode === 'move') {
+              if (c.start >= origStart) {
+                return { ...c, start: clampTime(c.start + delta) }
+              }
+              return c
+            }
+            // trims ripple by shifting clips that begin after the trim point
+            const pivot = origStart + (mode === 'trim-start' ? 0 : origDuration)
+            if (c.start >= pivot) {
+              return { ...c, start: clampTime(c.start + deltaDur) }
+            }
+            return c
+          })
+        }
+
+        return { ...prev, clips: updatedClips }
+      }, { push: false })
 
       // snap ghost
       if (mode === 'move') {
@@ -553,7 +683,7 @@ function App() {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [pxPerSec, setProject, pushCheckpoint, project.clips, allowOverlap, selection.marquee, clips, tracks])
+  }, [pxPerSec, setProject, pushCheckpoint, project.clips, allowOverlap, selection.marquee, clips, tracks, rippleEdit])
 
   return (
     <div className="app">
@@ -584,6 +714,10 @@ function App() {
           <label className="pill">
             <input type="checkbox" checked={allowOverlap} onChange={(e) => setAllowOverlap(e.target.checked)} />
             Allow overlap
+          </label>
+          <label className="pill">
+            <input type="checkbox" checked={rippleEdit} onChange={(e) => setRippleEdit(e.target.checked)} />
+            Ripple move/trim
           </label>
           <label className="pill">
             <input type="checkbox" checked={loopEnabled} onChange={(e) => setLoopEnabled(e.target.checked)} />
@@ -647,14 +781,28 @@ function App() {
           <section className="timeline-shell">
             <div className="timeline-toolbar">
               <div className="pill">Zoom</div>
-              <input
-                type="range"
-                min={0.6}
-                max={3}
-                step={0.1}
-                value={zoom}
-                onChange={(e) => setZoom(parseFloat(e.target.value))}
-              />
+            <input
+              type="range"
+              min={0.6}
+              max={3}
+              step={0.1}
+              value={zoom}
+              onChange={(e) => setZoom(parseFloat(e.target.value))}
+            />
+            <button className="ghost" onClick={() => {
+              if (!selection.clipIds.length) return
+              const picked = clips.filter(c => selection.clipIds.includes(c.id))
+              if (!picked.length || !timelineRef.current) return
+              const start = Math.min(...picked.map(c => c.start))
+              const end = Math.max(...picked.map(c => c.start + c.duration))
+              const padding = 0.5
+              const span = Math.max(MIN_CLIP, end - start + padding)
+              const viewPx = timelineRef.current.parentElement?.clientWidth || 800
+              const targetZoom = clamp(viewPx / (span * 80), ZOOM_MIN, ZOOM_MAX)
+              setZoom(targetZoom)
+              const scrollTarget = Math.max(0, (start - padding) * (80 * targetZoom))
+              timelineRef.current.parentElement?.scrollTo({ left: scrollTarget, behavior: 'smooth' })
+            }}>Zoom to selection</button>
               <div className="pill">Playhead</div>
               <input
                 type="range"
@@ -666,7 +814,20 @@ function App() {
               />
             </div>
 
-            <div className="timeline-wrapper">
+            <div
+              className="timeline-wrapper"
+              onWheel={(e) => {
+                if (e.ctrlKey || e.metaKey || e.altKey) {
+                  e.preventDefault()
+                  const delta = e.deltaY > 0 ? -0.12 : 0.12
+                  setZoom(z => clamp(z + delta, ZOOM_MIN, ZOOM_MAX))
+                } else if (e.shiftKey && timelineRef.current?.parentElement) {
+                  e.preventDefault()
+                  const scroller = timelineRef.current.parentElement
+                  scroller.scrollLeft += e.deltaY
+                }
+              }}
+            >
               <div className="ruler" style={{ width: timelineWidth }} onClick={handleRulerClick}>
                 {timeTicks.map((t) => (
                   <div key={t} className="tick" style={{ left: t * pxPerSec }}>
@@ -688,6 +849,16 @@ function App() {
                     }}
                   />
                 )}
+                {loopEnabled && (
+                  <div
+                    className="loop-range"
+                    style={{
+                      left: loopRange.start * pxPerSec,
+                      width: (loopRange.end - loopRange.start) * pxPerSec
+                    }}
+                    data-label={`Loop ${formatTime(loopRange.start)} → ${formatTime(loopRange.end)}`}
+                  />
+                )}
                 {snap.position !== null && (
                   <div className="snap-ghost" style={{ left: snap.position * pxPerSec }} data-label={snap.label || ''} />
                 )}
@@ -697,7 +868,38 @@ function App() {
                       <span className="badge">{track.type === 'video' ? 'V' : 'A'}</span>
                       {track.name}
                     </div>
-                    <div className="track-lane" data-track-index={tIndex}>
+                    <div
+                      className="track-lane"
+                      data-track-index={tIndex}
+                      onDragOver={(e) => {
+                        if (e.dataTransfer.types.includes('text/asset-id')) {
+                          e.preventDefault()
+                        }
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault()
+                        const assetId = e.dataTransfer.getData('text/asset-id')
+                        if (!assetId) return
+                        const asset = assets.find(a => a.id === assetId)
+                        if (!asset) return
+                        const rect = e.currentTarget.getBoundingClientRect()
+                        const x = e.clientX - rect.left + (timelineRef.current?.parentElement?.scrollLeft || 0)
+                        const seconds = clampTime(x / pxPerSec)
+                        const color = CLIP_COLORS[(clips.length) % CLIP_COLORS.length]
+                        setProject(prev => ({
+                          ...prev,
+                          clips: [...prev.clips, {
+                            id: `${asset.id}-drop-${Date.now()}`,
+                            title: asset.name,
+                            track: track.id,
+                            color,
+                            start: seconds,
+                            duration: asset.duration
+                          }]
+                        }))
+                        pushCheckpoint()
+                      }}
+                    >
                       {clips.filter(c => c.track === track.id).map((clip) => (
                         <div
                           key={clip.id}
@@ -780,10 +982,26 @@ function App() {
           <ul className="asset-list">
             {assets.length === 0 && <li>No assets yet</li>}
             {assets.map(a => (
-              <li key={a.id} className="asset-row">
-                <div>
+              <li
+                key={a.id}
+                className="asset-row"
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('text/asset-id', a.id)
+                  e.dataTransfer.effectAllowed = 'copy'
+                }}
+              >
+                <div className="asset-meta">
                   <strong>{a.name}</strong>
                   <div className="muted small">{a.type || 'file'} · ~{a.duration.toFixed(1)}s</div>
+                  {a.thumb && <img src={a.thumb} alt="thumb" className="asset-thumb" />}
+                  {a.waveform && (
+                    <div className="waveform">
+                      {a.waveform.map((v, idx) => (
+                        <span key={idx} style={{ height: `${Math.max(4, v * 26)}px` }} />
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="asset-actions">
                   {tracks.map(t => (
@@ -793,20 +1011,41 @@ function App() {
               </li>
             ))}
           </ul>
-          <p>Planned: waveform/thumb extraction + drag-to-track.</p>
+          <p className="muted">Waveform/thumb extraction ready; drag assets straight onto a track or use the send buttons.</p>
         </div>
       )}
       {activeTab === 'export' && (
         <div className="placeholder export-box">
           <div className="export-actions">
-            <button className="ghost" onClick={exportJson}>Export JSON</button>
+            <select className="ghost" value={exportPreset} onChange={(e) => setExportPreset(e.target.value as typeof exportPreset)}>
+              <option value="json">JSON bundle</option>
+              <option value="mp4">MP4 · 1080p</option>
+              <option value="webm">WebM · 720p</option>
+            </select>
+            <button className="ghost" disabled={isRendering} onClick={async () => {
+              if (exportPreset === 'json') {
+                exportJson()
+                return
+              }
+              setIsRendering(true)
+              await new Promise(res => setTimeout(res, 450))
+              const payload = `Rendered ${exportPreset.toUpperCase()} preview with ${tracks.length} tracks, ${clips.length} clips, ${markers.length} markers.`
+              const blob = new Blob([payload], { type: exportPreset === 'mp4' ? 'video/mp4' : 'video/webm' })
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url
+              a.download = exportPreset === 'mp4' ? 'preview.mp4' : 'preview.webm'
+              a.click()
+              URL.revokeObjectURL(url)
+              setIsRendering(false)
+            }}>{isRendering ? 'Rendering…' : 'Render preset'}</button>
             <label className="ghost">
               Import JSON
               <input type="file" accept="application/json" hidden onChange={importJson} />
             </label>
             <button className="ghost" onClick={addMarker}>Add marker @ playhead</button>
           </div>
-          <p>Later: choose render target (mp4/webm), codec, range, burn-in markers.</p>
+          <p>Preset renderer mocks final output; swap in ffmpeg/wasm backend later for real encodes.</p>
         </div>
       )}
     </div>
