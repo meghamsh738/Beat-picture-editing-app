@@ -237,6 +237,7 @@ function App() {
   const [playing, setPlaying] = useState(false)
   const [allowOverlap, setAllowOverlap] = useState(false)
   const [rippleEdit, setRippleEdit] = useState(false)
+  const [rollEdit, setRollEdit] = useState(false)
   const [loopEnabled, setLoopEnabled] = useState(false)
   const [loopRange, setLoopRange] = useState<{ start: number; end: number }>({ start: 0, end: 8 })
   const [assets, setAssets] = useState<Asset[]>([])
@@ -759,15 +760,49 @@ function App() {
             return { ...c, start: candidate }
           }
           if (mode === 'trim-start') {
+            const prevSibling = siblings.filter(s => s.start + s.duration <= origStart).at(-1)
             const newStart = clampTime(origStart + deltaSec)
             const snappedStart = snapTime(newStart, snaps).time
+
+            // Roll: adjust boundary between previous sibling and this clip
+            if (rollEdit && prevSibling) {
+              const deltaBoundary = snappedStart - origStart
+              const newPrevDur = Math.max(minDur, prevSibling.duration + deltaBoundary)
+              const newThisDur = Math.max(minDur, origDuration - deltaBoundary)
+              if (newPrevDur >= minDur && newThisDur >= minDur) {
+                updatedClips = updatedClips.map(o => {
+                  if (o.id === prevSibling.id) return { ...o, duration: newPrevDur }
+                  if (o.id === id) return { ...o, start: snappedStart, duration: newThisDur }
+                  return o
+                })
+                return updatedClips.find(o => o.id === id) as Clip
+              }
+            }
+
             const newDur = Math.max(minDur, origDuration - (snappedStart - origStart))
-            const prevSibling = siblings.filter(s => s.start + s.duration <= origStart).at(-1)
             const boundedStart = !allowOverlap && prevSibling ? Math.max(snappedStart, prevSibling.start + prevSibling.duration + 0.01) : snappedStart
             return { ...c, start: clampTime(boundedStart), duration: Math.max(minDur, newDur) }
           }
+          // trim-end
           let newDur = Math.max(minDur, origDuration + deltaSec)
           const nextSibling = siblings.find(s => s.start >= origStart)
+
+          if (rollEdit && nextSibling) {
+            const snappedEnd = snapTime(origStart + newDur, snaps).time
+            const deltaBoundary = snappedEnd - (origStart + origDuration)
+            const newNextStart = nextSibling.start + deltaBoundary
+            const newNextDur = Math.max(minDur, nextSibling.duration - deltaBoundary)
+            const newThisDur = Math.max(minDur, origDuration + deltaBoundary)
+            if (newNextDur >= minDur) {
+              updatedClips = updatedClips.map(o => {
+                if (o.id === nextSibling.id) return { ...o, start: newNextStart, duration: newNextDur }
+                if (o.id === id) return { ...o, duration: newThisDur }
+                return o
+              })
+              return updatedClips.find(o => o.id === id) as Clip
+            }
+          }
+
           if (nextSibling && !allowOverlap) {
             newDur = Math.min(newDur, nextSibling.start - origStart - 0.01)
           }
@@ -876,6 +911,10 @@ function App() {
           <label className="pill">
             <input type="checkbox" checked={rippleEdit} onChange={(e) => setRippleEdit(e.target.checked)} />
             Ripple move/trim
+          </label>
+          <label className="pill">
+            <input type="checkbox" checked={rollEdit} onChange={(e) => setRollEdit(e.target.checked)} />
+            Roll at clip boundary
           </label>
           <label className="pill">
             <input type="checkbox" checked={loopEnabled} onChange={(e) => setLoopEnabled(e.target.checked)} />
