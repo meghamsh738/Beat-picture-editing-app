@@ -21,6 +21,10 @@ type ProjectState = {
   markers: Marker[]
 }
 
+type SelectionState = {
+  clipIds: string[]
+}
+
 const DEFAULT_TRACKS: Track[] = [
   { id: 'v1', name: 'V1 · Motion', type: 'video' },
   { id: 'v2', name: 'V2 · Titles', type: 'video' },
@@ -108,11 +112,14 @@ function App() {
   const [playhead, setPlayhead] = useState(4.5)
   const [zoom, setZoom] = useState(1.4) // multiplier for px/sec
   const [playing, setPlaying] = useState(false)
+  const [allowOverlap, setAllowOverlap] = useState(false)
+  const [loopEnabled, setLoopEnabled] = useState(false)
+  const [loopRange, setLoopRange] = useState<{ start: number; end: number }>({ start: 0, end: 8 })
   const { state: project, set: setProject, undo, redo, canUndo, canRedo, pushCheckpoint } = useHistoryState<ProjectState>(
     { tracks: DEFAULT_TRACKS, clips: DEFAULT_CLIPS, markers: DEFAULT_MARKERS }
   )
   const { tracks, clips, markers } = project
-  const [selectedClip, setSelectedClip] = useState<string | null>(null)
+  const [selection, setSelection] = useState<SelectionState>({ clipIds: [] })
 
   const timelineRef = useRef<HTMLDivElement | null>(null)
   const [viewWindow, setViewWindow] = useState({ start: 0, duration: 8 })
@@ -179,15 +186,14 @@ function App() {
     }
   }, [playing])
 
-  // Keyboard nudging for selected clip + undo/redo
+  // Keyboard: nudge, playback toggles, undo/redo, delete/duplicate
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!selectedClip) return
       const step = e.shiftKey ? 0.5 : 0.1
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         setProject(prev => ({
           ...prev,
-          clips: prev.clips.map(c => c.id === selectedClip
+          clips: prev.clips.map(c => selection.clipIds.includes(c.id)
             ? { ...c, start: Math.max(0, c.start + (e.key === 'ArrowLeft' ? -step : step)) }
             : c)
         }), { push: false })
@@ -197,6 +203,31 @@ function App() {
         e.preventDefault()
         setPlaying(p => !p)
       }
+      if (e.key.toLowerCase() === 'l' && !e.metaKey && !e.ctrlKey) setPlayhead(p => clampTime(p + 0.5))
+      if (e.key.toLowerCase() === 'j' && !e.metaKey && !e.ctrlKey) setPlayhead(p => clampTime(p - 0.5))
+      if (e.key.toLowerCase() === 'k' && !e.metaKey && !e.ctrlKey) setPlaying(false)
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selection.clipIds.length) {
+          setProject(prev => ({ ...prev, clips: prev.clips.filter(c => !selection.clipIds.includes(c.id)) }))
+          setSelection({ clipIds: [] })
+          pushCheckpoint()
+        }
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd') {
+        e.preventDefault()
+        if (!selection.clipIds.length) return
+        setProject(prev => {
+          const clones: Clip[] = []
+          selection.clipIds.forEach((id, idx) => {
+            const source = prev.clips.find(c => c.id === id)
+            if (!source) return
+            const newStart = clampTime(source.start + 0.5 + idx * 0.1)
+            clones.push({ ...source, id: `${Date.now()}-${idx}`, start: newStart })
+          })
+          return { ...prev, clips: [...prev.clips, ...clones] }
+        })
+        pushCheckpoint()
+      }
       if (e.metaKey || e.ctrlKey) {
         if (e.key.toLowerCase() === 'z' && !e.shiftKey) undo()
         if (e.key.toLowerCase() === 'z' && e.shiftKey) redo()
@@ -204,7 +235,7 @@ function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selectedClip, setProject, pushCheckpoint, undo, redo])
+  }, [selection.clipIds, setProject, pushCheckpoint, undo, redo])
 
   const pxPerSec = useMemo(() => 80 * zoom, [zoom])
 
@@ -310,7 +341,14 @@ function App() {
       origDuration: clip.duration
     }
     dragStartedState.current = project
-    setSelectedClip(clip.id)
+    if (e.metaKey || e.ctrlKey || e.shiftKey) {
+      setSelection((prev) => {
+        const has = prev.clipIds.includes(clip.id)
+        return { clipIds: has ? prev.clipIds.filter(id => id !== clip.id) : [...prev.clipIds, clip.id] }
+      })
+    } else {
+      setSelection({ clipIds: [clip.id] })
+    }
   }
 
   useEffect(() => {
@@ -335,11 +373,13 @@ function App() {
             candidate = snapTime(candidate, snaps)
             const prevSibling = siblings.filter(s => s.start + s.duration <= candidate).at(-1)
             const nextSibling = siblings.find(s => s.start >= candidate)
-            if (prevSibling && candidate < prevSibling.start + prevSibling.duration) {
-              candidate = prevSibling.start + prevSibling.duration + 0.01
-            }
-            if (nextSibling && candidate + c.duration > nextSibling.start) {
-              candidate = Math.max(0, nextSibling.start - c.duration - 0.01)
+            if (!allowOverlap) {
+              if (prevSibling && candidate < prevSibling.start + prevSibling.duration) {
+                candidate = prevSibling.start + prevSibling.duration + 0.01
+              }
+              if (nextSibling && candidate + c.duration > nextSibling.start) {
+                candidate = Math.max(0, nextSibling.start - c.duration - 0.01)
+              }
             }
             candidate = clampTime(candidate)
             return { ...c, start: candidate }
@@ -349,12 +389,12 @@ function App() {
             const snappedStart = snapTime(newStart, snaps)
             const newDur = Math.max(minDur, origDuration - (snappedStart - origStart))
             const prevSibling = siblings.filter(s => s.start + s.duration <= origStart).at(-1)
-            const boundedStart = prevSibling ? Math.max(snappedStart, prevSibling.start + prevSibling.duration + 0.01) : snappedStart
+            const boundedStart = !allowOverlap && prevSibling ? Math.max(snappedStart, prevSibling.start + prevSibling.duration + 0.01) : snappedStart
             return { ...c, start: clampTime(boundedStart), duration: Math.max(minDur, newDur) }
           }
           let newDur = Math.max(minDur, origDuration + deltaSec)
           const nextSibling = siblings.find(s => s.start >= origStart)
-          if (nextSibling) {
+          if (nextSibling && !allowOverlap) {
             newDur = Math.min(newDur, nextSibling.start - origStart - 0.01)
           }
           newDur = Math.min(newDur, TOTAL_DURATION - origStart)
@@ -407,6 +447,32 @@ function App() {
             <button disabled={!canUndo} onClick={undo}>⌘Z Undo</button>
             <button disabled={!canRedo} onClick={redo}>⇧⌘Z Redo</button>
           </div>
+          <label className="pill">
+            <input type="checkbox" checked={allowOverlap} onChange={(e) => setAllowOverlap(e.target.checked)} />
+            Allow overlap
+          </label>
+          <label className="pill">
+            <input type="checkbox" checked={loopEnabled} onChange={(e) => setLoopEnabled(e.target.checked)} />
+            Loop
+            <input
+              type="number"
+              min={0}
+              max={loopRange.end - 0.1}
+              step={0.1}
+              value={loopRange.start}
+              onChange={(e) => setLoopRange({ ...loopRange, start: clampTime(parseFloat(e.target.value) || 0) })}
+              className="pill-input"
+            />
+            <input
+              type="number"
+              min={loopRange.start + 0.1}
+              max={TOTAL_DURATION}
+              step={0.1}
+              value={loopRange.end}
+              onChange={(e) => setLoopRange({ ...loopRange, end: clampTime(parseFloat(e.target.value) || TOTAL_DURATION) })}
+              className="pill-input"
+            />
+          </label>
         </div>
       </header>
 
@@ -487,7 +553,7 @@ function App() {
                       {clips.filter(c => c.track === track.id).map((clip) => (
                         <div
                           key={clip.id}
-                          className={`clip ${selectedClip === clip.id ? 'selected' : ''}`}
+                          className={`clip ${selection.clipIds.includes(clip.id) ? 'selected' : ''}`}
                           style={{
                             left: clip.start * pxPerSec,
                             width: clip.duration * pxPerSec,
@@ -495,7 +561,11 @@ function App() {
                           }}
                           title={`${clip.title} (${formatTime(clip.start)} - ${formatTime(clip.start + clip.duration)})`}
                           onMouseDown={(e) => startDrag(e, clip)}
-                          onClick={() => setSelectedClip(clip.id)}
+                          onClick={(e) => {
+                            if (!(e.metaKey || e.ctrlKey || e.shiftKey)) {
+                              setSelection({ clipIds: [clip.id] })
+                            }
+                          }}
                         >
                           <span>{clip.title}</span>
                         </div>
