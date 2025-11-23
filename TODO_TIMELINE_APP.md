@@ -24,7 +24,7 @@
 
 ## Waveforms & visuals
 - [>] Waveforms on timeline: basic bars done; add high-res zoomed renders and per-channel colors.
-- [ ] Generate/carry thumbnails for video clips on timeline.
+- [>] Generate/carry thumbnails for video clips on timeline (thumb capture + display shipped; high-res/per-clip cache still TODO).
 - [ ] Track height resizing; collapsed/expanded audio view.
 
 ## Media ingest/bin
