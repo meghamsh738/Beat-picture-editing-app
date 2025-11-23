@@ -23,6 +23,7 @@ type ProjectState = {
 
 type SelectionState = {
   clipIds: string[]
+  marquee: { x1: number; x2: number; y1: number; y2: number } | null
 }
 
 const DEFAULT_TRACKS: Track[] = [
@@ -119,7 +120,7 @@ function App() {
     { tracks: DEFAULT_TRACKS, clips: DEFAULT_CLIPS, markers: DEFAULT_MARKERS }
   )
   const { tracks, clips, markers } = project
-  const [selection, setSelection] = useState<SelectionState>({ clipIds: [] })
+  const [selection, setSelection] = useState<SelectionState>({ clipIds: [], marquee: null })
 
   const timelineRef = useRef<HTMLDivElement | null>(null)
   const [viewWindow, setViewWindow] = useState({ start: 0, duration: 8 })
@@ -209,7 +210,7 @@ function App() {
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selection.clipIds.length) {
           setProject(prev => ({ ...prev, clips: prev.clips.filter(c => !selection.clipIds.includes(c.id)) }))
-          setSelection({ clipIds: [] })
+          setSelection({ clipIds: [], marquee: null })
           pushCheckpoint()
         }
       }
@@ -325,7 +326,7 @@ function App() {
     return () => scroller.removeEventListener('scroll', onScroll)
   }, [pxPerSec])
 
-  const startDrag = (e: React.MouseEvent<HTMLDivElement>, clip: Clip) => {
+  const startClipDrag = (e: React.MouseEvent<HTMLDivElement>, clip: Clip) => {
     const rect = e.currentTarget.getBoundingClientRect()
     const offsetX = e.clientX - rect.left
     const handleZone = 10
@@ -344,15 +345,50 @@ function App() {
     if (e.metaKey || e.ctrlKey || e.shiftKey) {
       setSelection((prev) => {
         const has = prev.clipIds.includes(clip.id)
-        return { clipIds: has ? prev.clipIds.filter(id => id !== clip.id) : [...prev.clipIds, clip.id] }
+        return { clipIds: has ? prev.clipIds.filter(id => id !== clip.id) : [...prev.clipIds, clip.id], marquee: null }
       })
     } else {
-      setSelection({ clipIds: [clip.id] })
+      setSelection({ clipIds: [clip.id], marquee: null })
     }
+  }
+
+  const startMarquee = (e: React.MouseEvent<HTMLDivElement>) => {
+    const container = timelineRef.current
+    if (!container) return
+    const bounds = container.getBoundingClientRect()
+    const x = e.clientX - bounds.left + (container.parentElement?.scrollLeft || 0)
+    const y = e.clientY - bounds.top + (container.parentElement?.scrollTop || 0)
+    setSelection({ clipIds: [], marquee: { x1: x, x2: x, y1: y, y2: y } })
   }
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
+      // marquee drag
+      if (selection.marquee) {
+        const container = timelineRef.current
+        if (!container) return
+        const bounds = container.getBoundingClientRect()
+        const x = e.clientX - bounds.left + (container.parentElement?.scrollLeft || 0)
+        const y = e.clientY - bounds.top + (container.parentElement?.scrollTop || 0)
+        const currentBox = { ...selection.marquee, x2: x, y2: y }
+        setSelection(prev => ({ ...prev, marquee: currentBox }))
+        const [x1, x2] = [Math.min(currentBox.x1, currentBox.x2), Math.max(currentBox.x1, currentBox.x2)]
+        const [y1, y2] = [Math.min(currentBox.y1, currentBox.y2), Math.max(currentBox.y1, currentBox.y2)]
+        const picked: string[] = []
+        clips.forEach(c => {
+          const clipX1 = c.start * pxPerSec
+          const clipX2 = (c.start + c.duration) * pxPerSec
+          const trackIndex = tracks.findIndex(t => t.id === c.track)
+          const laneTop = trackIndex * 76 // approximate lane height including gaps
+          const laneBottom = laneTop + 70
+          if (clipX2 >= x1 && clipX1 <= x2 && laneBottom >= y1 && laneTop <= y2) {
+            picked.push(c.id)
+          }
+        })
+        setSelection(prev => ({ ...prev, clipIds: picked }))
+        return
+      }
+
       if (!dragRef.current) return
       const { id, mode, startX, origStart, origDuration } = dragRef.current
       const deltaSec = (e.clientX - startX) / pxPerSec
@@ -411,6 +447,9 @@ function App() {
         dragRef.current = null
         pushCheckpoint()
       }
+      if (selection.marquee) {
+        setSelection(prev => ({ ...prev, marquee: null }))
+      }
     }
 
     window.addEventListener('mousemove', onMove)
@@ -419,7 +458,7 @@ function App() {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [pxPerSec, setProject, pushCheckpoint, project.clips])
+  }, [pxPerSec, setProject, pushCheckpoint, project.clips, allowOverlap, selection.marquee, clips, tracks])
 
   return (
     <div className="app">
@@ -542,14 +581,25 @@ function App() {
                 <div className="playhead" style={{ left: playhead * pxPerSec }} />
               </div>
 
-              <div className="tracks" style={{ width: timelineWidth }} ref={timelineRef}>
-                {tracks.map((track) => (
+              <div className="tracks" style={{ width: timelineWidth }} ref={timelineRef} onMouseDown={startMarquee}>
+                {selection.marquee && (
+                  <div
+                    className="marquee"
+                    style={{
+                      left: Math.min(selection.marquee.x1, selection.marquee.x2),
+                      top: Math.min(selection.marquee.y1, selection.marquee.y2),
+                      width: Math.abs(selection.marquee.x2 - selection.marquee.x1),
+                      height: Math.abs(selection.marquee.y2 - selection.marquee.y1)
+                    }}
+                  />
+                )}
+                {tracks.map((track, tIndex) => (
                   <div key={track.id} className="track-row">
                     <div className="track-label">
                       <span className="badge">{track.type === 'video' ? 'V' : 'A'}</span>
                       {track.name}
                     </div>
-                    <div className="track-lane">
+                    <div className="track-lane" data-track-index={tIndex}>
                       {clips.filter(c => c.track === track.id).map((clip) => (
                         <div
                           key={clip.id}
@@ -560,10 +610,14 @@ function App() {
                             background: clip.color
                           }}
                           title={`${clip.title} (${formatTime(clip.start)} - ${formatTime(clip.start + clip.duration)})`}
-                          onMouseDown={(e) => startDrag(e, clip)}
+                          onMouseDown={(e) => {
+                            e.stopPropagation()
+                            startClipDrag(e, clip)
+                          }}
                           onClick={(e) => {
+                            e.stopPropagation()
                             if (!(e.metaKey || e.ctrlKey || e.shiftKey)) {
-                              setSelection({ clipIds: [clip.id] })
+                              setSelection({ clipIds: [clip.id], marquee: null })
                             }
                           }}
                         >
