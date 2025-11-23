@@ -384,6 +384,32 @@ body {
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
 
+.clip.audio {
+  color: #08101c;
+  background: linear-gradient(135deg, rgba(0, 246, 255, 0.15), rgba(0, 246, 255, 0.4));
+}
+
+.clip-wave {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 6px;
+  height: 22px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 2px;
+  gap: 1px;
+  align-items: end;
+  pointer-events: none;
+}
+
+.clip-wave span {
+  display: block;
+  width: 2px;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 1px;
+}
+
 .clip:hover {
   transform: translateY(-2px);
   box-shadow: 0 12px 24px rgba(0,0,0,0.4);

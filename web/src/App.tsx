@@ -9,6 +9,9 @@ type Clip = {
   color: string
   start: number // seconds
   duration: number // seconds
+  url?: string
+  assetType?: string
+  waveform?: number[] | null
 }
 
 type Marker = { time: number; label: string; color: string }
@@ -77,6 +80,12 @@ const ZOOM_MAX = 3
 const VIEW_PADDING_PX = 60
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
+
+const ensureAudioContext = async (ref: React.MutableRefObject<AudioContext | null>) => {
+  if (!ref.current) ref.current = new AudioContext()
+  if (ref.current.state === 'suspended') await ref.current.resume()
+  return ref.current
+}
 
 const loadMediaDuration = (file: File): Promise<number> => new Promise(resolve => {
   try {
@@ -206,6 +215,12 @@ function App() {
   const [snap, setSnap] = useState<SnapState>({ position: null, label: null })
   const loopHandleRef = useRef<DragHandle>(null)
 
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const bufferCacheRef = useRef<Map<string, AudioBuffer>>(new Map())
+  const sourcesRef = useRef<AudioBufferSourceNode[]>([])
+  const playheadStartRef = useRef<number>(0)
+  const playStartTimeRef = useRef<number>(0)
+
   const timelineRef = useRef<HTMLDivElement | null>(null)
   const [viewWindow, setViewWindow] = useState({ start: 0, duration: 8 })
   const rafRef = useRef<number | null>(null)
@@ -244,38 +259,16 @@ function App() {
     localStorage.setItem(STORAGE_KEY, payload)
   }, [project])
 
-  // playback loop
+  // playback loop (audio-backed)
   useEffect(() => {
-    if (!playing) {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
-      rafRef.current = null
-      return
+    if (playing) {
+      startPlayback()
+    } else {
+      stopPlayback()
     }
-    let lastTs: number | null = null
-    const tick = (ts: number) => {
-      if (lastTs === null) lastTs = ts
-      const delta = (ts - lastTs) / 1000
-      lastTs = ts
-      setPlayhead(prev => {
-        let next = prev + delta
-        if (loopEnabled) {
-          const { start, end } = loopRange
-          if (next >= end) {
-            next = start + ((next - start) % (end - start))
-          }
-        } else if (next >= TOTAL_DURATION) {
-          setPlaying(false)
-          return TOTAL_DURATION
-        }
-        return clampTime(next)
-      })
-      rafRef.current = requestAnimationFrame(tick)
-    }
-    rafRef.current = requestAnimationFrame(tick)
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    }
-  }, [playing])
+    return () => stopPlayback()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, loopEnabled, loopRange, clips])
 
   // Keyboard: nudge, playback toggles, undo/redo, delete/duplicate
   useEffect(() => {
@@ -340,6 +333,73 @@ function App() {
 
   const clampTime = (value: number) => Math.min(Math.max(value, 0), TOTAL_DURATION)
   const handleScrub = (value: number) => setPlayhead(clampTime(value))
+
+  const stopPlayback = () => {
+    sourcesRef.current.forEach(s => {
+      try { s.stop() } catch (_) { /* ignore */ }
+    })
+    sourcesRef.current = []
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    rafRef.current = null
+  }
+
+  const fetchBuffer = async (ctx: AudioContext, url?: string) => {
+    if (!url) return null
+    const cache = bufferCacheRef.current
+    if (cache.has(url)) return cache.get(url) || null
+    const res = await fetch(url)
+    const arr = await res.arrayBuffer()
+    const buf = await ctx.decodeAudioData(arr)
+    cache.set(url, buf)
+    return buf
+  }
+
+  const startPlayback = async () => {
+    const ctx = await ensureAudioContext(audioCtxRef)
+    stopPlayback()
+    playheadStartRef.current = playhead
+    playStartTimeRef.current = ctx.currentTime
+    const startAt = ctx.currentTime + 0.05
+    const audioClips = clips.filter(c => (c.assetType || '').startsWith('audio'))
+    const resolved = await Promise.all(audioClips.map(async clip => {
+      const buf = await fetchBuffer(ctx, clip.url)
+      if (!buf) return null
+      const offset = Math.max(0, playheadStartRef.current - clip.start)
+      const dur = Math.max(0, clip.duration - offset)
+      if (dur <= 0) return null
+      const when = startAt + Math.max(0, clip.start - playheadStartRef.current)
+      const src = ctx.createBufferSource()
+      src.buffer = buf
+      src.connect(ctx.destination)
+      src.start(when, offset, dur)
+      return src
+    }))
+    sourcesRef.current = resolved.filter(Boolean) as AudioBufferSourceNode[]
+
+    const stopAt = loopEnabled ? loopRange.end : TOTAL_DURATION
+
+    const tick = () => {
+      const ctxNow = ctx.currentTime
+      const elapsed = ctxNow - playStartTimeRef.current
+      const nextPos = playheadStartRef.current + elapsed
+      if (loopEnabled && nextPos >= loopRange.end) {
+        setPlayhead(loopRange.start)
+        playheadStartRef.current = loopRange.start
+        playStartTimeRef.current = ctx.currentTime
+        startPlayback()
+        return
+      }
+      if (!loopEnabled && nextPos >= stopAt) {
+        setPlayhead(stopAt)
+        setPlaying(false)
+        return
+      }
+      setPlayhead(clampTime(nextPos))
+      rafRef.current = requestAnimationFrame(tick)
+    }
+
+    rafRef.current = requestAnimationFrame(tick)
+  }
 
   const collectSnapPoints = (trackId: string, excludeId?: string): SnapPoint[] => {
     const pts: SnapPoint[] = []
@@ -434,7 +494,10 @@ function App() {
         track: trackId,
         color,
         start: end + 0.1,
-        duration: asset.duration
+        duration: asset.duration,
+        url: asset.url,
+        assetType: asset.type,
+        waveform: asset.waveform ?? null
       }
       return { ...prev, clips: [...prev.clips, newClip] }
     })
@@ -704,7 +767,14 @@ function App() {
           <div className="pill">Timecode {formatTime(playhead)}</div>
           <div className="transport">
             <button onClick={() => setPlayhead(0)}>⏮</button>
-            <button onClick={() => setPlaying(p => !p)}>{playing ? '⏸' : '▶'}</button>
+            <button
+              onClick={async () => {
+                if (!playing) await ensureAudioContext(audioCtxRef)
+                setPlaying(p => !p)
+              }}
+            >
+              {playing ? '⏸' : '▶'}
+            </button>
             <button onClick={() => setPlayhead(TOTAL_DURATION)}>⏭</button>
           </div>
           <div className="pill">
@@ -894,16 +964,21 @@ function App() {
                             track: track.id,
                             color,
                             start: seconds,
-                            duration: asset.duration
+                            duration: asset.duration,
+                            url: asset.url,
+                            assetType: asset.type,
+                            waveform: asset.waveform ?? null
                           }]
                         }))
                         pushCheckpoint()
                       }}
                     >
-                      {clips.filter(c => c.track === track.id).map((clip) => (
+                      {clips.filter(c => c.track === track.id).map((clip) => {
+                        const isAudio = (clip.assetType || '').startsWith('audio') || track.type === 'audio'
+                        return (
                         <div
                           key={clip.id}
-                          className={`clip ${selection.clipIds.includes(clip.id) ? 'selected' : ''}`}
+                          className={`clip ${selection.clipIds.includes(clip.id) ? 'selected' : ''} ${isAudio ? 'audio' : ''}`}
                           style={{
                             left: clip.start * pxPerSec,
                             width: clip.duration * pxPerSec,
@@ -922,8 +997,16 @@ function App() {
                           }}
                         >
                           <span>{clip.title}</span>
+                          {isAudio && clip.waveform && (
+                            <div className="clip-wave">
+                              {clip.waveform.map((v, idx) => (
+                                <span key={idx} style={{ height: `${Math.max(6, v * 28)}px` }} />
+                              ))}
+                            </div>
+                          )}
                         </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   </div>
                 ))}
