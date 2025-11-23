@@ -2,6 +2,14 @@
 
 Premiere-style timeline prototype with snapping, loop ranges, ripple edits, asset ingest, and export presets. Ships with free sample media and an automated Playwright smoke that records a video + screenshot.
 
+Latest capture (from Playwright smoke):
+
+![Timeline screenshot](./screenshots/timeline.png)
+
+Short run-through video (recorded automatically by Playwright):
+
+<video src="./screenshots/timeline-run.webm" controls width="800"></video>
+
 ## Quick start
 1) Install deps: `npm install`
 2) Dev server: `npm run dev -- --host --port 4178`
