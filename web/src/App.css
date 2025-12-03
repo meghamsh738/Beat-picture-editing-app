@@ -124,6 +124,7 @@ body {
 .pill.ghosty { background: rgba(255, 255, 255, 0.02); border-color: #1c2738; }
 .pill.slim { padding: 8px 10px; }
 .pill.active { border-color: #22d3ee; box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.25); }
+.pill.error { border-color: #f87171; color: #fecdd3; }
 
 .timecode {
   background: linear-gradient(120deg, rgba(33, 212, 253, 0.18), rgba(115, 103, 255, 0.18));
@@ -189,6 +190,19 @@ body {
 
 .media-panel { max-height: 540px; overflow: hidden; display: flex; flex-direction: column; gap: 12px; }
 .inspector { min-height: 320px; }
+.beat-panel select {
+  width: 100%;
+  background: #0c121d;
+  border: 1px solid #1f2a3b;
+  color: #e8ecf5;
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.beat-form { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.beat-results { display: flex; flex-direction: column; gap: 6px; }
+.beat-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .panel-head {
   font-weight: 800;

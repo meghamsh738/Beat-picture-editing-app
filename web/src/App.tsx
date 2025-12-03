@@ -52,6 +52,13 @@ type Asset = {
   thumb?: string
 }
 
+type BeatAnalysis = {
+  assetId: string
+  beats: number[]
+  bpm: number
+  createdAt: number
+}
+
 const DEFAULT_TRACKS: TrackState[] = [
   { id: 'v1', name: 'V1 · Motion', type: 'video', height: 'normal' },
   { id: 'v2', name: 'V2 · Titles', type: 'video', height: 'normal' },
@@ -175,6 +182,39 @@ const decodeWaveform = async (file: File): Promise<number[] | null> => {
   }
 }
 
+const analyzeBeatsFromBuffer = (audio: AudioBuffer) => {
+  const channel = audio.getChannelData(0)
+  const hop = 512
+  const frame = 1024
+  const sr = audio.sampleRate
+  const energies: number[] = []
+  for (let i = 0; i + frame < channel.length; i += hop) {
+    let sum = 0
+    for (let j = 0; j < frame; j++) {
+      const v = channel[i + j] || 0
+      sum += v * v
+    }
+    energies.push(Math.sqrt(sum / frame))
+  }
+  const mean = energies.reduce((a, b) => a + b, 0) / Math.max(1, energies.length)
+  const variance = energies.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, energies.length)
+  const std = Math.sqrt(variance)
+  const threshold = mean + std * 0.9
+  const beats: number[] = []
+  let lastBeat = -1
+  energies.forEach((e, idx) => {
+    const t = (idx * hop) / sr
+    if (e > threshold && e > (energies[idx - 1] || 0) && e >= (energies[idx + 1] || 0)) {
+      if (lastBeat < 0 || t - lastBeat > 0.23) {
+        beats.push(Number(t.toFixed(3)))
+        lastBeat = t
+      }
+    }
+  })
+  const bpm = beats.length > 1 ? Math.round(60 * (beats.length - 1) / (beats[beats.length - 1] - beats[0])) : 0
+  return { beats, bpm }
+}
+
 const loadThumb = (file: File): Promise<string | null> => new Promise(resolve => {
   if (file.type.startsWith('image')) {
     const reader = new FileReader()
@@ -286,6 +326,9 @@ function App() {
   const [trackHeightScale, setTrackHeightScale] = useState(1)
   const [exportPreset, setExportPreset] = useState<'json' | 'mp4' | 'webm'>('json')
   const [isRendering, setIsRendering] = useState(false)
+  const [beatAnalyses, setBeatAnalyses] = useState<Record<string, BeatAnalysis>>({})
+  const [beatStatus, setBeatStatus] = useState<{ state: 'idle' | 'analyzing' | 'ready' | 'error'; message?: string; assetId?: string }>({ state: 'idle' })
+  const [selectedBeatAsset, setSelectedBeatAsset] = useState<string | null>(null)
   const { state: project, set: setProject, undo, redo, canUndo, canRedo, pushCheckpoint } = useHistoryState<ProjectState>(
     { tracks: DEFAULT_TRACKS, clips: DEFAULT_CLIPS, markers: DEFAULT_MARKERS }
   )
@@ -312,6 +355,13 @@ function App() {
   const anySolo = useMemo(() => tracks.some(t => t.solo), [tracks])
   const heroAsset = useMemo(() => assets.find(a => a.type.startsWith('video') || a.type.startsWith('image')), [assets])
 
+  useEffect(() => {
+    if (!selectedBeatAsset) {
+      const firstAudio = assets.find(a => a.type.startsWith('audio'))
+      if (firstAudio) setSelectedBeatAsset(firstAudio.id)
+    }
+  }, [assets, selectedBeatAsset])
+
   type DragInfo = {
     id: string
     mode: 'move' | 'trim-start' | 'trim-end' | 'slip' | 'slide'
@@ -333,6 +383,7 @@ function App() {
           clips: parsed.clips ?? DEFAULT_CLIPS,
           markers: parsed.markers ?? DEFAULT_MARKERS
         })
+        if (parsed.beatAnalyses) setBeatAnalyses(parsed.beatAnalyses)
       } catch (err) {
         console.warn('Failed to parse saved project', err)
       }
@@ -341,9 +392,9 @@ function App() {
 
   // Persist project
   useEffect(() => {
-    const payload = JSON.stringify(project)
+    const payload = JSON.stringify({ ...project, beatAnalyses })
     localStorage.setItem(STORAGE_KEY, payload)
-  }, [project])
+  }, [project, beatAnalyses])
 
   // playback loop (audio-backed)
   useEffect(() => {
@@ -450,6 +501,56 @@ function App() {
     cache.set(url, buf)
     bufferDurRef.current.set(url, buf.duration)
     return buf
+  }
+
+  const runBeatAnalysis = async (assetId: string) => {
+    const asset = assets.find(a => a.id === assetId)
+    if (!asset || !(asset.type || '').startsWith('audio') || !asset.url) {
+      setBeatStatus({ state: 'error', message: 'Select an audio asset with a valid URL.' })
+      return
+    }
+    try {
+      setBeatStatus({ state: 'analyzing', assetId })
+      const ctx = new AudioContext()
+      const res = await fetch(asset.url)
+      const arr = await res.arrayBuffer()
+      const audio = await ctx.decodeAudioData(arr)
+      const { beats, bpm } = analyzeBeatsFromBuffer(audio)
+      setBeatAnalyses(prev => ({ ...prev, [asset.id]: { assetId: asset.id, beats, bpm, createdAt: Date.now() } }))
+      setBeatStatus({ state: 'ready', assetId, message: `${beats.length} beats · BPM ~ ${bpm || 'n/a'}` })
+    } catch (err) {
+      console.error('beat analysis failed', err)
+      setBeatStatus({ state: 'error', message: 'Beat analysis failed' })
+    }
+  }
+
+  const applyBeatsToMarkers = (assetId: string) => {
+    const analysis = beatAnalyses[assetId]
+    const asset = assets.find(a => a.id === assetId)
+    if (!analysis || !asset) return
+    setProject(prev => {
+      const nextMarkers = [...prev.markers]
+      analysis.beats.forEach((t, idx) => {
+        nextMarkers.push({ time: clampTime(t), label: `${asset.name} · Beat ${idx + 1}`, color: '#22d3ee' })
+      })
+      return { ...prev, markers: nextMarkers }
+    })
+    pushCheckpoint()
+  }
+
+  const exportBeatCSV = (assetId: string) => {
+    const analysis = beatAnalyses[assetId]
+    const asset = assets.find(a => a.id === assetId)
+    if (!analysis || !asset) return
+    const header = 'Index,Time (s)\n'
+    const rows = analysis.beats.map((t, i) => `${i + 1},${t.toFixed(3)}`).join('\n')
+    const blob = new Blob([header + rows], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${asset.name.replace(/\s+/g, '_')}_beats.csv`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   const startPlayback = async () => {
@@ -1168,6 +1269,47 @@ function App() {
                 <div className="pill ghosty">Clips {clips.length}</div>
                 <div className="pill ghosty">Tracks {tracks.length}</div>
               </div>
+            </section>
+
+            <section className="panel beat-panel" data-testid="beat-panel">
+              <div className="panel-head">
+                <span>Beat detection (AI-lite)</span>
+                <span className="muted small">on-device</span>
+              </div>
+              <div className="beat-form">
+                <label className="muted small">Audio asset</label>
+                <select
+                  value={selectedBeatAsset || assets.find(a => a.type.startsWith('audio'))?.id || ''}
+                  onChange={(e) => setSelectedBeatAsset(e.target.value || null)}
+                >
+                  {assets.filter(a => a.type.startsWith('audio')).map(a => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+                <button
+                  className="ghost"
+                  disabled={(!selectedBeatAsset && !assets.find(a => a.type.startsWith('audio'))) || beatStatus.state === 'analyzing'}
+                  onClick={() => runBeatAnalysis(selectedBeatAsset || assets.find(a => a.type.startsWith('audio'))?.id || '')}
+                >
+                  {beatStatus.state === 'analyzing' ? 'Detecting…' : 'Detect beats'}
+                </button>
+              </div>
+              {beatStatus.message && (
+                <div className={`pill ghosty ${beatStatus.state === 'error' ? 'error' : ''}`}>
+                  {beatStatus.message}
+                </div>
+              )}
+              {selectedBeatAsset && beatAnalyses[selectedBeatAsset] && (
+                <div className="beat-results">
+                  <div className="pill ghosty">Beats {beatAnalyses[selectedBeatAsset].beats.length}</div>
+                  <div className="pill ghosty">BPM ~ {beatAnalyses[selectedBeatAsset].bpm || 'n/a'}</div>
+                  <div className="beat-actions">
+                    <button className="ghost" onClick={() => applyBeatsToMarkers(selectedBeatAsset)}>Add beats as markers</button>
+                    <button className="ghost" onClick={() => exportBeatCSV(selectedBeatAsset)}>Export CSV</button>
+                  </div>
+                </div>
+              )}
+              <p className="muted small">Beat peaks are computed from waveform energy. Apply them as timeline markers or export to share.</p>
             </section>
           </div>
 
