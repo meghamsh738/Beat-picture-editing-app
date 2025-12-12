@@ -5,11 +5,28 @@
   font-family: 'Space Grotesk', 'Archivo', 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
   background: #070a0f;
   color: #e8ecf5;
+  --surface: rgba(255, 255, 255, 0.04);
+  --surface-2: rgba(255, 255, 255, 0.06);
+  --border: rgba(255, 255, 255, 0.08);
+  --muted: #9fb0cc;
+  --accent: #22d3ee;
+  --accent-2: #7367ff;
+  --danger: #f87171;
 }
 
 * { box-sizing: border-box; }
 
 a { color: inherit; }
+
+::selection {
+  background: rgba(34, 211, 238, 0.22);
+  color: #e8ecf5;
+}
+
+:focus-visible {
+  outline: 2px solid rgba(34, 211, 238, 0.85);
+  outline-offset: 2px;
+}
 
 body {
   margin: 0;
@@ -75,6 +92,12 @@ body {
   letter-spacing: 0.01em;
   cursor: pointer;
   transition: all 120ms ease;
+}
+
+.workspace-modes .mode:hover {
+  border-color: rgba(34, 211, 238, 0.35);
+  color: #d8e8ff;
+  transform: translateY(-1px);
 }
 
 .workspace-modes .mode.active {
@@ -145,6 +168,7 @@ body {
   min-width: 44px;
   box-shadow: 0 8px 14px rgba(0, 0, 0, 0.35);
 }
+.transport.chunky button:hover { transform: translateY(-1px); border-color: rgba(34, 211, 238, 0.35); }
 .transport button:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .tabs {
@@ -167,6 +191,8 @@ body {
   font-weight: 700;
   letter-spacing: 0.01em;
 }
+
+.tab:hover { background: rgba(255, 255, 255, 0.03); color: #d9e6ff; }
 
 .tab.active {
   background: linear-gradient(120deg, #2563eb, #06b6d4);
@@ -600,4 +626,12 @@ body {
 @media (max-width: 1100px) {
   .workspace-grid { grid-template-columns: 1fr; }
   .workspace-bar { grid-template-columns: 1fr; gap: 10px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    scroll-behavior: auto !important;
+    transition: none !important;
+    animation: none !important;
+  }
 }
