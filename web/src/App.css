@@ -33,11 +33,11 @@ label {
   grid-template-columns: auto 1fr auto;
   gap: var(--space-4);
   align-items: center;
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 2px solid var(--border);
   border-radius: var(--radius-lg);
   padding: var(--space-4);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-soft);
   z-index: 100;
 }
 
@@ -60,7 +60,7 @@ label {
   height: 14px;
   border-radius: 50%;
   background: linear-gradient(135deg, var(--accent), var(--accent-strong));
-  box-shadow: 0 0 0 2px var(--border), 0 10px 18px rgba(47, 106, 246, 0.2);
+  box-shadow: 0 0 0 2px var(--border), 0 10px 18px rgba(31, 91, 255, 0.2);
 }
 
 .workspace-modes {
@@ -71,7 +71,7 @@ label {
 }
 
 .workspace-modes .mode {
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   background: var(--surface-2);
   color: var(--text);
   padding: 8px 12px;
@@ -83,6 +83,10 @@ label {
   font-size: 12px;
   cursor: pointer;
   transition: background-color var(--t-fast), border-color var(--t-fast), transform var(--t-fast);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .workspace-modes .mode:hover {
@@ -92,7 +96,7 @@ label {
 .workspace-modes .mode.active {
   color: #fff;
   background: var(--accent);
-  border-color: transparent;
+  border-color: var(--border);
   box-shadow: var(--shadow-soft);
 }
 
@@ -110,14 +114,19 @@ label {
   align-items: center;
   padding: 4px 10px;
   border-radius: 999px;
-  background: var(--surface-3);
-  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border: 2px solid var(--border);
   color: var(--text);
   font-weight: 600;
   font-size: 12px;
   font-family: var(--font-mono);
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
+  min-height: 32px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pill select {
@@ -131,7 +140,7 @@ label {
 .pill-input {
   width: 72px;
   background: #fff;
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text);
   padding: 6px 6px;
@@ -141,6 +150,7 @@ label {
 .pill.ghosty {
   background: var(--surface-2);
   border-style: dashed;
+  border-width: 2px;
 }
 
 .pill.slim {
@@ -148,9 +158,9 @@ label {
 }
 
 .pill.active {
-  border-color: rgba(47, 106, 246, 0.35);
-  background: var(--accent-soft);
-  color: var(--accent-strong);
+  border-color: rgba(31, 91, 255, 0.45);
+  background: var(--accent-weak);
+  color: var(--accent);
 }
 
 .pill.error {
@@ -160,9 +170,9 @@ label {
 }
 
 .timecode {
-  background: var(--accent-soft);
-  border-color: rgba(47, 106, 246, 0.35);
-  color: var(--accent-strong);
+  background: var(--accent-weak);
+  border-color: rgba(31, 91, 255, 0.45);
+  color: var(--accent);
 }
 
 .muted {
@@ -180,8 +190,8 @@ label {
 }
 
 .transport.chunky button {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 2px solid var(--border);
   color: var(--text);
   padding: 10px 12px;
   border-radius: var(--radius-sm);
@@ -195,7 +205,7 @@ label {
 }
 
 .transport.chunky button:hover:not(:disabled) {
-  background: #fff;
+  background: var(--surface-2);
 }
 
 .transport.chunky button:active:not(:disabled) {
@@ -204,8 +214,8 @@ label {
 
 .transport.chunky button:focus-visible {
   outline: none;
-  border-color: rgba(47, 106, 246, 0.45);
-  box-shadow: 0 0 0 2px rgba(47, 106, 246, 0.25);
+  border-color: rgba(31, 91, 255, 0.6);
+  box-shadow: 0 0 0 2px var(--focus);
 }
 
 .transport button:disabled {
@@ -216,7 +226,7 @@ label {
 .tabs {
   display: inline-flex;
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   border-radius: var(--radius-md);
   overflow: hidden;
 }
@@ -236,11 +246,15 @@ label {
   text-transform: uppercase;
   font-family: var(--font-mono);
   font-size: 12px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tab.active {
-  background: var(--panel);
-  color: var(--text);
+  background: var(--surface);
+  color: var(--accent);
   box-shadow: var(--shadow-soft);
 }
 
@@ -252,12 +266,31 @@ label {
 }
 
 .panel {
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 2px solid var(--border);
   border-radius: var(--radius-md);
   padding: var(--space-4);
   box-shadow: var(--shadow-soft);
   color: var(--text);
+}
+
+.asset-card,
+.asset-meta,
+.asset-row,
+.track-label {
+  min-width: 0;
+}
+
+.asset-title,
+.track-name,
+.clip-title {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
 }
 
 .media-panel {
@@ -275,7 +308,7 @@ label {
 .beat-panel select {
   width: 100%;
   background: #fff;
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   color: var(--text);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
@@ -314,13 +347,13 @@ label {
 }
 
 .panel-head + * {
-  border-top: 1px solid var(--border);
+  border-top: 2px solid var(--border);
   padding-top: var(--space-2);
 }
 
 .dropzone {
   width: 100%;
-  border: 1px dashed var(--border);
+  border: 2px dashed var(--border);
   border-radius: var(--radius-md);
   padding: 12px;
   text-align: center;
@@ -345,7 +378,7 @@ label {
   border-collapse: collapse;
   font-size: 13px;
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   border-radius: var(--radius-md);
   overflow: hidden;
 }
@@ -354,8 +387,8 @@ label {
   text-align: left;
   padding: 8px;
   color: var(--muted);
-  border-bottom: 1px solid var(--border);
-  background: #fff;
+  border-bottom: 2px solid var(--border);
+  background: var(--surface);
 }
 
 .asset-table td {
@@ -377,8 +410,8 @@ label {
 }
 
 .asset-card {
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 2px solid var(--border);
   border-radius: var(--radius-md);
   padding: 10px;
   display: flex;
@@ -392,7 +425,7 @@ label {
   position: relative;
   border-radius: var(--radius-md);
   background: var(--surface-3);
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   aspect-ratio: 16 / 9;
   background-size: cover;
   background-position: center;
@@ -416,7 +449,7 @@ label {
   height: 72px;
   object-fit: cover;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
 }
 
 .waveform {
@@ -435,7 +468,7 @@ label {
 }
 
 .waveform.soft span {
-  background: linear-gradient(180deg, rgba(47, 106, 246, 0.6), rgba(29, 78, 216, 0.35));
+  background: linear-gradient(180deg, rgba(31, 91, 255, 0.6), rgba(31, 91, 255, 0.35));
 }
 
 .waveform.hero {
@@ -449,8 +482,8 @@ label {
 }
 
 .monitor {
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 2px solid var(--border);
   border-radius: var(--radius-md);
   padding: 10px;
   box-shadow: var(--shadow-soft);
@@ -467,7 +500,7 @@ label {
 
 .monitor-body {
   background: var(--surface-3);
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   border-radius: var(--radius-md);
   overflow: hidden;
   position: relative;
@@ -509,7 +542,7 @@ label {
 .safe-guides {
   position: absolute;
   inset: 12%;
-  border: 1px solid var(--border-2);
+  border: 2px solid var(--border-2);
 }
 
 .time-badge {
@@ -517,7 +550,7 @@ label {
   bottom: 8px;
   right: 8px;
   background: #fff;
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   padding: 4px 8px;
   border-radius: var(--radius-sm);
   font-variant-numeric: tabular-nums;
@@ -537,7 +570,7 @@ label {
   list-style: none;
   margin: 0 0 14px;
   padding: 0;
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-2);
 }
@@ -581,15 +614,15 @@ label {
 }
 
 .timeline-shell {
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 2px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 14px 14px 12px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-soft);
 }
 
 .timeline-shell.pro {
-  background: var(--panel);
+  background: var(--surface);
   border-color: var(--border-2);
 }
 
@@ -627,8 +660,8 @@ label {
 }
 
 .ghost {
-  border: 1px dashed var(--border);
-  background: var(--surface-2);
+  border: 2px solid var(--border);
+  background: var(--surface);
   color: var(--text);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
@@ -644,6 +677,10 @@ label {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 select.ghost {
@@ -658,7 +695,7 @@ select.ghost {
 }
 
 .ghost:hover {
-  background: #fff;
+  background: var(--surface-2);
 }
 
 .ghost:active {
@@ -667,8 +704,8 @@ select.ghost {
 
 .ghost:focus-visible {
   outline: none;
-  border-color: rgba(47, 106, 246, 0.45);
-  box-shadow: 0 0 0 2px rgba(47, 106, 246, 0.25);
+  border-color: rgba(31, 91, 255, 0.6);
+  box-shadow: 0 0 0 2px var(--focus);
 }
 
 .ghost.tiny {
@@ -680,7 +717,7 @@ select.ghost {
 .timeline-wrapper {
   position: relative;
   overflow: auto;
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-2);
   padding: 12px 12px 18px 0;
@@ -689,7 +726,7 @@ select.ghost {
 .ruler {
   position: relative;
   height: 40px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 2px solid var(--border);
   background: var(--surface-2);
 }
 
@@ -715,7 +752,7 @@ select.ghost {
   width: 2px;
   height: 100%;
   background: var(--accent);
-  box-shadow: 0 0 0 6px rgba(47, 106, 246, 0.2);
+  box-shadow: 0 0 0 6px rgba(31, 91, 255, 0.2);
 }
 
 .tracks {
@@ -729,7 +766,7 @@ select.ghost {
   width: 2px;
   height: 100%;
   background: var(--accent);
-  box-shadow: 0 0 0 5px rgba(47, 106, 246, 0.2);
+  box-shadow: 0 0 0 5px rgba(31, 91, 255, 0.2);
   pointer-events: none;
 }
 
@@ -738,7 +775,7 @@ select.ghost {
   top: 4px;
   height: calc(100% - 8px);
   background: var(--warning-soft);
-  border: 1px dashed rgba(245, 158, 11, 0.45);
+  border: 2px dashed rgba(245, 158, 11, 0.45);
   border-radius: var(--radius-sm);
   pointer-events: none;
 }
@@ -750,7 +787,7 @@ select.ghost {
   left: 6px;
   padding: 2px 8px;
   background: #fff;
-  border: 1px solid rgba(245, 158, 11, 0.45);
+  border: 2px solid rgba(245, 158, 11, 0.45);
   border-radius: var(--radius-sm);
   color: var(--text-subtle);
   font-size: 11px;
@@ -768,7 +805,7 @@ select.ghost {
 
 .track-label {
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   border-radius: var(--radius-md);
   padding: 10px 12px;
   font-weight: 600;
@@ -782,19 +819,20 @@ select.ghost {
   display: flex;
   gap: 6px;
   margin-left: auto;
+  flex-shrink: 0;
 }
 
 .track-buttons .active {
   background: var(--accent-soft);
-  color: var(--accent-strong);
-  border-color: rgba(47, 106, 246, 0.35);
+  color: var(--accent);
+  border-color: rgba(31, 91, 255, 0.45);
 }
 
 .track-lane {
   position: relative;
   min-height: var(--track-height);
   background: var(--surface-3);
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   border-radius: var(--radius-md);
   overflow: hidden;
 }
@@ -811,7 +849,7 @@ select.ghost {
 .marquee {
   position: absolute;
   background: var(--accent-soft);
-  border: 1px solid var(--accent);
+  border: 2px solid var(--accent);
   border-radius: 4px;
   pointer-events: none;
 }
@@ -823,7 +861,8 @@ select.ghost {
   width: 22px;
   height: 22px;
   border-radius: 6px;
-  background: var(--surface-3);
+  background: var(--surface-2);
+  border: 2px solid var(--border);
   color: var(--text-subtle);
   font-weight: 600;
   font-family: var(--font-mono);
@@ -842,15 +881,17 @@ select.ghost {
   align-items: center;
   padding: 0 12px;
   font-weight: 600;
-  color: #0f172a;
-  border: 1px solid rgba(15, 23, 42, 0.2);
+  color: var(--text);
+  border: 2px solid var(--border);
   cursor: grab;
   transition: transform var(--t-fast), box-shadow var(--t-fast);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .clip.audio {
-  color: #0f172a;
-  background: linear-gradient(135deg, rgba(47, 106, 246, 0.2), rgba(29, 78, 216, 0.35));
+  color: var(--text);
+  background: linear-gradient(135deg, rgba(31, 91, 255, 0.2), rgba(31, 91, 255, 0.35));
 }
 
 .clip-thumb {
@@ -862,7 +903,7 @@ select.ghost {
   border-radius: 6px;
   background-size: cover;
   background-position: center;
-  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.2);
+  box-shadow: inset 0 0 0 2px var(--border);
   pointer-events: none;
 }
 
@@ -889,12 +930,12 @@ select.ghost {
 
 .clip:hover {
   transform: translateY(-1px);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-soft);
 }
 
 .clip.selected {
   outline: 2px solid var(--accent);
-  box-shadow: 0 0 0 4px rgba(47, 106, 246, 0.2);
+  box-shadow: 0 0 0 4px rgba(31, 91, 255, 0.2);
 }
 
 .clip::before,
@@ -966,7 +1007,7 @@ select.ghost {
   background: var(--accent);
   border-radius: 2px;
   cursor: ew-resize;
-  box-shadow: 0 0 0 4px rgba(47, 106, 246, 0.2);
+  box-shadow: 0 0 0 4px rgba(31, 91, 255, 0.2);
 }
 
 .loop-handle.end {

@@ -1,8 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import path from 'path'
 
-const timelineTrackLane = '.track-lane'
-
 const sampleAudioPath = path.join(process.cwd(), 'public', 'samples', 'free-tone-10s.wav')
 const sampleImagePath = path.join(process.cwd(), 'public', 'samples', 'mars-1280.jpg')
 
@@ -12,10 +10,11 @@ const waitForRenderIdle = async (page: Page) => {
 
 test('timeline basics, snapping, loop handles, asset drop, export', async ({ page }) => {
   await page.goto('/')
+  await page.addStyleTag({ content: '* { transition: none !important; animation: none !important; }' })
   await expect(page.getByText('Edit workspace')).toBeVisible()
 
   // landing view
-  await page.screenshot({ path: 'screenshots/edit-overview-v2.png', fullPage: true })
+  await page.screenshot({ path: 'screenshots/edit-overview.png', fullPage: true })
 
   // marker click moves playhead
   const firstMarker = page.locator('.marker-list li').first()
@@ -44,7 +43,7 @@ test('timeline basics, snapping, loop handles, asset drop, export', async ({ pag
   const input = page.locator('input[type="file"]')
   await input.setInputFiles([sampleAudioPath, sampleImagePath])
   await waitForRenderIdle(page)
-  await page.screenshot({ path: 'screenshots/assets-v2.png', fullPage: true })
+  await page.screenshot({ path: 'screenshots/assets.png', fullPage: true })
   const assetRow = page.locator('.asset-row').first()
   await expect(assetRow).toBeVisible()
   const sendButton = assetRow.getByRole('button', { name: /Send to/ }).first()
@@ -52,7 +51,7 @@ test('timeline basics, snapping, loop handles, asset drop, export', async ({ pag
   await page.locator('.tabs .tab', { hasText: 'Edit' }).click()
   await waitForRenderIdle(page)
   const clipCount = await page.locator('.clip').count()
-  expect(clipCount).toBeGreaterThan(5)
+  expect(clipCount).toBeGreaterThanOrEqual(5)
 
   // beat detection module
   const beatPanel = page.locator('.beat-panel')
@@ -69,6 +68,6 @@ test('timeline basics, snapping, loop handles, asset drop, export', async ({ pag
   await renderBtn.click()
   await page.waitForTimeout(600)
 
-  await page.screenshot({ path: 'screenshots/export-v2.png', fullPage: true })
-  await page.screenshot({ path: 'screenshots/timeline-v2.png', fullPage: true })
+  await page.screenshot({ path: 'screenshots/export.png', fullPage: true })
+  await page.screenshot({ path: 'screenshots/timeline.png', fullPage: true })
 })

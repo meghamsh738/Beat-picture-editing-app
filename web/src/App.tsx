@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
 import { get, set } from 'idb-keyval'
 import './App.css'
@@ -179,7 +179,7 @@ const loadMediaDuration = (file: File): Promise<number> => new Promise(resolve =
       resolve(clamp(dur, 0.5, 120))
     }
     media.onerror = () => resolve(5)
-  } catch (err) {
+  } catch {
     resolve(5)
   }
 })
@@ -279,7 +279,7 @@ const loadThumb = (file: File): Promise<string | null> => new Promise(resolve =>
         const data = canvas.toDataURL('image/jpeg', 0.75)
         URL.revokeObjectURL(url)
         resolve(data)
-      } catch (_) {
+      } catch {
         URL.revokeObjectURL(url)
         resolve(null)
       }
@@ -380,7 +380,7 @@ function App() {
     try {
       const cached = localStorage.getItem('timeline-keymap')
       if (cached) return { ...DEFAULT_KEYMAP, ...JSON.parse(cached) }
-    } catch (_) { /* ignore */ }
+    } catch { /* ignore */ }
     return DEFAULT_KEYMAP
   })
   const { state: project, set: setProject, undo, redo, canUndo, canRedo, pushCheckpoint } = useHistoryState<ProjectState>(
@@ -449,7 +449,7 @@ function App() {
         console.warn('Failed to parse saved project', err)
       }
     }
-  }, [])
+  }, [setProject, setBeatAnalyses])
 
   useEffect(() => {
     try {
@@ -459,13 +459,13 @@ function App() {
         setDrafts(parsed)
         if (parsed.length) setActiveDraftId(parsed[0].id)
       }
-    } catch (_) { /* ignore */ }
+    } catch { /* ignore */ }
   }, [])
 
   useEffect(() => {
     try {
       localStorage.setItem('timeline-keymap', JSON.stringify(keymap))
-    } catch (_) { /* ignore */ }
+    } catch { /* ignore */ }
   }, [keymap])
 
   // Persist project
@@ -476,12 +476,6 @@ function App() {
 
   useEffect(() => {
     analysisStatusRef.current = analysisStatuses
-  }, [analysisStatuses])
-
-  useEffect(() => {
-    if (Object.values(analysisStatuses).some(s => s === 'pending') && !processingAnalysisRef.current) {
-      runNextAnalysis()
-    }
   }, [analysisStatuses])
 
   useEffect(() => {
@@ -612,15 +606,15 @@ function App() {
 
   const stopPlayback = () => {
     sourcesRef.current.forEach(s => {
-      try { s.stop() } catch (_) { /* ignore */ }
+      try { s.stop() } catch { /* ignore */ }
     })
     sourcesRef.current = []
     if (masterGainRef.current) {
-      try { masterGainRef.current.disconnect() } catch (_) { /* ignore */ }
+      try { masterGainRef.current.disconnect() } catch { /* ignore */ }
       masterGainRef.current = null
     }
     if (analyserRef.current) {
-      try { analyserRef.current.disconnect() } catch (_) { /* ignore */ }
+      try { analyserRef.current.disconnect() } catch { /* ignore */ }
       analyserRef.current = null
     }
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
@@ -804,7 +798,7 @@ function App() {
     }
   }
 
-  const collectSnapPoints = (trackId: string, excludeId?: string): SnapPoint[] => {
+  const collectSnapPoints = useCallback((trackId: string, excludeId?: string): SnapPoint[] => {
     const pts: SnapPoint[] = []
     markers.forEach(m => pts.push({ time: m.time, label: `Marker · ${m.label}` }))
     const trackClips = clips.filter(c => c.track === trackId && c.id !== excludeId).sort((a, b) => a.start - b.start)
@@ -823,9 +817,9 @@ function App() {
     })
     for (let t = 0; t <= TOTAL_DURATION; t += GRID_STEP) pts.push({ time: Number(t.toFixed(3)), label: 'Grid' })
     return pts
-  }
+  }, [markers, clips])
 
-  const snapTime = (candidate: number, snaps: SnapPoint[]) => {
+  const snapTime = useCallback((candidate: number, snaps: SnapPoint[]) => {
     let best = candidate
     let label: string | null = null
     let minDelta = snapStrength
@@ -838,7 +832,7 @@ function App() {
       }
     }
     return { time: best, label }
-  }
+  }, [snapStrength])
 
   const addMarker = () => {
     const palette = ['#22d3ee', '#f97316', '#e11d48', '#a78bfa', '#22c55e']
@@ -894,7 +888,7 @@ function App() {
     e.target.value = ''
   }
 
-  const runNextAnalysis = async () => {
+  const runNextAnalysis = useCallback(async () => {
     if (processingAnalysisRef.current) return
     const pendingEntry = Object.entries(analysisStatusRef.current).find(([, status]) => status === 'pending')
     if (!pendingEntry) return
@@ -929,9 +923,18 @@ function App() {
     } finally {
       pendingFilesRef.current.delete(assetId)
       processingAnalysisRef.current = false
-      setTimeout(runNextAnalysis, 20)
+      const pendingLeft = Object.values(analysisStatusRef.current).some(v => v === 'pending')
+      if (pendingLeft) {
+        setTimeout(runNextAnalysis, 20)
+      }
     }
-  }
+  }, [setAnalysisStatuses, setAssets])
+
+  useEffect(() => {
+    if (Object.values(analysisStatuses).some(s => s === 'pending') && !processingAnalysisRef.current) {
+      runNextAnalysis()
+    }
+  }, [analysisStatuses, runNextAnalysis])
 
   const saveDraft = (name?: string) => {
     const trimmed = (name || draftName || 'Draft').trim()
@@ -1033,15 +1036,17 @@ function App() {
     setExportStatus('Preparing encoder…')
     let useFfmpeg = false
     try {
-      const ffmpegMod = await import('@ffmpeg/ffmpeg')
-      const createFFmpeg = (ffmpegMod as any).createFFmpeg || (ffmpegMod as any).default?.createFFmpeg
+      type FfmpegFactory = (opts: { corePath: string; log: boolean }) => { load: () => Promise<void> }
+      type FfmpegModule = { createFFmpeg?: FfmpegFactory; default?: { createFFmpeg?: FfmpegFactory } }
+      const ffmpegMod = (await import('@ffmpeg/ffmpeg')) as unknown as FfmpegModule
+      const createFFmpeg = ffmpegMod.createFFmpeg ?? ffmpegMod.default?.createFFmpeg
       if (!createFFmpeg) throw new Error('ffmpeg factory missing')
       const pickCorePath = async () => {
         const localCore = '/ffmpeg-core/ffmpeg-core.js'
         try {
           const res = await fetch(localCore, { method: 'HEAD' })
           if (res.ok) return localCore
-        } catch (_) { /* fallback */ }
+        } catch { /* fallback */ }
         return 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/ffmpeg-core.js'
       }
       const corePath = await pickCorePath()
@@ -1071,7 +1076,6 @@ function App() {
       setExportStatus(steps[i])
       setExportProgress(20 + (i + 1) * 20)
       // simulate workload; in ffmpeg path we could pipe real commands later
-      // eslint-disable-next-line no-await-in-loop
       await new Promise(res => setTimeout(res, 420))
     }
 
@@ -1378,7 +1382,7 @@ function App() {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [pxPerSec, setProject, pushCheckpoint, project.clips, allowOverlap, selection.marquee, clips, tracks, rippleEdit])
+  }, [pxPerSec, setProject, pushCheckpoint, project.clips, allowOverlap, selection.marquee, clips, tracks, rippleEdit, rollEdit, collectSnapPoints, snapTime])
 
   return (
     <div className="app">
@@ -1485,7 +1489,7 @@ function App() {
                       {!a.thumb && !a.waveform && <div className="muted small">{a.type.split('/')[0]}</div>}
                     </div>
                     <div className="asset-meta">
-                      <strong>{a.name}</strong>
+                      <strong className="asset-title">{a.name}</strong>
                       <div className="muted small">{a.type || 'file'} · ~{a.duration.toFixed(1)}s</div>
                     </div>
                     <div className="asset-actions">
@@ -1818,7 +1822,7 @@ function App() {
                   >
                     <div className="track-label">
                       <span className="badge">{track.type === 'video' ? 'V' : 'A'}</span>
-                      {track.name}
+                      <span className="track-name">{track.name}</span>
                       <div className="track-buttons">
                         <button
                           className={`ghost tiny ${track.mute ? 'active' : ''}`}
@@ -1906,7 +1910,7 @@ function App() {
                             {clip.thumb && (
                               <span className="clip-thumb" style={{ backgroundImage: `url(${clip.thumb})` }} />
                             )}
-                            <span>{clip.title}</span>
+                            <span className="clip-title">{clip.title}</span>
                             {isAudio && clip.waveform && (
                               <div className="clip-wave">
                                 {clip.waveform.map((v, idx) => (
@@ -1940,7 +1944,7 @@ function App() {
                           {clip.thumb && (
                             <span className="clip-thumb" style={{ backgroundImage: `url(${clip.thumb})` }} />
                           )}
-                          <span>{clip.title}</span>
+                          <span className="clip-title">{clip.title}</span>
                           {(clip.fadeIn ?? 0) > 0 && (
                             <span
                               className="fade-handle fade-in"
@@ -2043,7 +2047,7 @@ function App() {
                 }}
               >
                 <div className="asset-meta">
-                  <strong>{a.name}</strong>
+                  <strong className="asset-title">{a.name}</strong>
                   <div className="muted small">{a.type || 'file'} · ~{a.duration.toFixed(1)}s</div>
                   {analysisStatuses[a.id] && (
                     <div className={`pill ghosty ${analysisStatuses[a.id] === 'error' ? 'error' : ''}`}>
