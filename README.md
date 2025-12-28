@@ -1,37 +1,42 @@
 # Timeline Builder (fastfx)
 
-React + Vite timeline prototype with snapping, ripple edits, loop ranges, waveform/thumb ingest, and mock export presets. Playwright smoke tests auto-produce screenshots and a short run video.
+A desktop-style timeline prototype built with React + Vite. Features snapping (markers/edges/gaps), ripple moves/trims, loop ranges, asset ingest with waveforms/thumbs, zoom/pan controls, and export presets. Playwright smoke tests ship with recorded video/screenshot outputs.
 
-## Quick start
+Quick start
 - `cd web`
 - `npm install`
 - `npm run dev -- --host --port 4178` then open http://localhost:4178
 
-## Latest captures (`web/screenshots/`)
-| Edit overview | Assets tab | Beat detection | Export tab |
-| --- | --- | --- | --- |
-| ![Edit overview](web/screenshots/edit-overview-v2.png) | ![Assets](web/screenshots/assets-v2.png) | ![Beat detection](web/screenshots/beat-detect.png) | ![Export](web/screenshots/export-v2.png) |
+Captures (see `web/screenshots/`)
+- Edit overview: `web/screenshots/edit-overview.png`
+- Assets tab (with free sample image + tone): `web/screenshots/assets.png`
+- Export tab: `web/screenshots/export.png`
+- Run video: `web/screenshots/timeline-run.webm`
 
-Full run video: `web/screenshots/timeline-run.webm`
-
-## Tests & build (run from `web/`)
+Tests & build (from `web/`)
 - Smoke test + recording: `npm run test:e2e`
 - Production build: `npm run build`
-- Playwright browsers live in `~/.cache/ms-playwright`; if running from an NTFS path, set `PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright` to avoid chmod issues.
+- Playwright browsers live in your Linux home cache (`~/.cache/ms-playwright`); if running from NTFS, set `PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright` to avoid chmod issues.
 
-## Sample media
-Bundled free assets live in `web/public/samples/`:
-- `free-tone-10s.wav` – 10s sine tone (public domain)
-- `mars-1280.jpg` – NASA/ESA Mars true-color photo (public domain)
-- Legacy Samplelib files: `sample-5s.mp4`, `sample-3s.wav`, `sample-photo.jpg`
-Use the Assets tab file picker or drag these into tracks.
+Sample media
+Bundled free assets live in `web/public/samples/`. New truly-free examples:
+- `free-tone-10s.wav` – 10s sine tone generated in-house (public domain)
+- `mars-1280.jpg` – NASA/ESA Mars true-color image (public domain)
+Legacy samples from Samplelib (mp4 / short wav / photo) remain for convenience. Use the Assets tab file picker or drag directly onto tracks.
 
-## Feature snapshot
-- Playback with loop ranges; track mute/solo/lock honored.
-- Trims: ripple, roll, slip, slide with snap-to-marker/edge/gap.
-- Visuals: waveforms on audio clips; captured thumbs on video clips; compact track height toggle.
-- Preview: monitor follows active video clip; audio via Web Audio.
-- Asset ingest: waveform + thumbnail extraction; drag/drop or “Send to track”.
-- Export: mock presets (JSON/MP4/WebM) plus the Playwright smoke that records screenshots + video.
+Current feature set
+- Audio + video playback synced to playhead; track-aware mute/solo/lock; loop ranges.
+- Timeline trims: ripple, roll, slip, slide (alt+trim handles); snapping to markers/edges.
+- Clip visuals: audio waveforms on clips; video thumbnails captured on import.
+- **New: Individual Track Resizing**: Drag the bottom edge of any track header to resize it.
+- **New: Media Bin List View**: Toggle between Grid and List views for better asset management.
+- **Updated UI**: Lab notebook neo-brutalist styling (bold type + clean panels).
 
-See `web/README.md` for deeper notes, shortcuts, and file map.
+## Screenshots
+
+| Edit overview | Assets tab | Export tab |
+| --- | --- | --- |
+| ![Edit overview](web/screenshots/edit-overview.png) | ![Assets](web/screenshots/assets.png) | ![Export](web/screenshots/export.png) |
+
+More details
+See `web/README.md` for feature notes, shortcuts, and file map.
