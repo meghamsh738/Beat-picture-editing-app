@@ -9,7 +9,7 @@ const waitForRenderIdle = async (page: Page) => {
 }
 
 test('timeline basics, snapping, loop handles, asset drop, export', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
   await page.addStyleTag({ content: '* { transition: none !important; animation: none !important; }' })
   await expect(page.getByText('Edit workspace')).toBeVisible()
 
@@ -46,12 +46,34 @@ test('timeline basics, snapping, loop handles, asset drop, export', async ({ pag
   await page.screenshot({ path: 'screenshots/assets.png', fullPage: true })
   const assetRow = page.locator('.asset-row').first()
   await expect(assetRow).toBeVisible()
-  const sendButton = assetRow.getByRole('button', { name: /Send to/ }).first()
+  const sendButton = assetRow.getByRole('button', { name: /Send to A1/i })
   await sendButton.click()
+  const imageRow = page.locator('.asset-row', { hasText: 'mars-1280.jpg' })
+  await expect(imageRow).toBeVisible()
+  await imageRow.getByRole('button', { name: /Send to V2/i }).click()
   await page.locator('.tabs .tab', { hasText: 'Edit' }).click()
   await waitForRenderIdle(page)
   const clipCount = await page.locator('.clip').count()
   expect(clipCount).toBeGreaterThanOrEqual(5)
+  await page.getByTestId('clip-c1').hover()
+  await expect(page.getByTestId('clip-tooltip-c1')).toBeVisible()
+  await page.getByTestId('clip-c3').click()
+  await expect(page.getByTestId('source-label')).toHaveText(/Lower Third/i)
+  await expect(page.getByTestId('source-view')).toHaveClass(/selected/)
+  await page.getByTestId('playhead-scrub').dispatchEvent('pointerdown')
+  await expect(page.getByTestId('scrub-overlay')).toBeVisible()
+  await page.dispatchEvent('body', 'pointerup')
+  await page.getByTestId('playhead-scrub').evaluate((el) => {
+    const input = el as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+    setter?.call(input, '12')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await expect(page.getByText(/Playhead 00:12/)).toBeVisible()
+  await expect(page.getByTestId('program-clip')).toContainText('V2')
+  await expect(page.getByTestId('program-clip')).toContainText('00:10.80')
+  await expect(page.getByTestId('program-image')).toBeVisible()
 
   // beat detection module
   const beatPanel = page.locator('.beat-panel')

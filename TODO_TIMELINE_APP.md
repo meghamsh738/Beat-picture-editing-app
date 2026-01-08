@@ -18,6 +18,7 @@
 
 ## Timeline operations
 - [>] Trim modes: ripple/roll/slip/slide implemented; need media-offset clamp UI and edge-case gap handling polish.
+- [ ] Stronger trim affordance: clip-edge hover handles + clearer hit areas.
 - [>] Clip controls: per-track mute/solo/lock landed; linking/grouping/disable still pending.
 - [ ] Nested sequences/subclips.
 - [ ] Snapping refinements: edges/markers/gaps with configurable strength.
@@ -39,6 +40,7 @@
 
 ## Audio mixing
 - [ ] Track/bus mixer UI with meters (peak/LUFS), pan, sends.
+- [ ] Inline per-track mini meters in timeline during playback.
 - [ ] Clip gain + keyframe envelopes; VST/AU host optional.
 - [ ] Ducking/sidechain presets.
 
@@ -51,6 +53,7 @@
 - [ ] Program/source monitors with split-view, safe guides, rulers; fullscreen playback.
 - [ ] JKL shuttle with variable rates; jog wheel support.
 - [ ] Keyboard presets; command palette.
+- [ ] Edit mode status pill near playhead (ripple/roll/overlap).
 
 ## Project/test infrastructure
 - [ ] Autosave/backup/versions; portable project export (media collect).

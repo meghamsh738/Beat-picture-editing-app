@@ -293,6 +293,25 @@ label {
   flex: 1;
 }
 
+.clip-kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  min-width: 18px;
+  padding: 0 6px;
+  margin-right: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(15, 23, 42, 0.15);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  flex: 0 0 auto;
+}
+
 .media-panel {
   max-height: 540px;
   overflow: hidden;
@@ -514,6 +533,11 @@ label {
   place-items: center;
 }
 
+.source-view.selected {
+  outline: 2px solid rgba(31, 91, 255, 0.45);
+  box-shadow: 0 0 0 3px rgba(31, 91, 255, 0.18);
+}
+
 .program-view {
   padding: 8px;
 }
@@ -531,6 +555,70 @@ label {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.video-frame.has-image video {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.video-frame.has-poster .program-still {
+  opacity: 1;
+}
+
+.program-still {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+}
+
+.program-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.6);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+
+.program-clip {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 2px solid var(--border);
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  max-width: calc(100% - 16px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scrub-overlay {
+  position: absolute;
+  top: 38px;
+  left: 8px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.85);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
 }
 
 .monitor-overlay {
@@ -573,6 +661,11 @@ label {
   border: 2px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-2);
+}
+
+.marker-list {
+  max-height: 220px;
+  overflow-y: auto;
 }
 
 .asset-list li,
@@ -755,6 +848,17 @@ select.ghost {
   box-shadow: 0 0 0 6px rgba(31, 91, 255, 0.2);
 }
 
+.playhead-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0.65;
+  pointer-events: none;
+  z-index: 4;
+}
+
 .tracks {
   position: relative;
   padding: 12px 0 6px;
@@ -887,6 +991,43 @@ select.ghost {
   transition: transform var(--t-fast), box-shadow var(--t-fast);
   min-width: 0;
   overflow: hidden;
+}
+
+.clip-tooltip {
+  position: absolute;
+  left: 10px;
+  bottom: calc(100% + 6px);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.95);
+  border: 2px solid var(--border);
+  color: var(--text-subtle);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  box-shadow: var(--shadow-soft);
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition: opacity var(--t-fast), transform var(--t-fast);
+  z-index: 8;
+  width: max-content;
+  max-width: 240px;
+}
+
+.clip-tooltip-title {
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.clip:hover .clip-tooltip {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .clip.audio {

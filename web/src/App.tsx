@@ -46,6 +46,8 @@ type DragHandle = null | 'loop-start' | 'loop-end'
 
 type SnapPoint = { time: number; label: string }
 
+type ProgramImageMode = 'none' | 'still' | 'poster'
+
 type Asset = {
   id: string
   name: string
@@ -164,6 +166,12 @@ const ensureAudioContext = async (ref: React.MutableRefObject<AudioContext | nul
   if (!ref.current) ref.current = new AudioContext()
   if (ref.current.state === 'suspended') await ref.current.resume()
   return ref.current
+}
+
+const isTrackCompatible = (assetType: string, trackType: Track['type']) => {
+  if (assetType.startsWith('audio')) return trackType === 'audio'
+  if (assetType.startsWith('video') || assetType.startsWith('image')) return trackType === 'video'
+  return true
 }
 
 const loadMediaDuration = (file: File): Promise<number> => new Promise(resolve => {
@@ -372,10 +380,18 @@ function App() {
   const pendingFilesRef = useRef<Map<string, File>>(new Map())
   const processingAnalysisRef = useRef(false)
   const analysisStatusRef = useRef<Record<string, 'pending' | 'processing' | 'cached' | 'done' | 'error'>>({})
+  const [programImage, setProgramImage] = useState<string | null>(null)
+  const [programImageMode, setProgramImageMode] = useState<ProgramImageMode>('none')
+  const [programStatus, setProgramStatus] = useState<'idle' | 'video' | 'image' | 'loading' | 'error'>('idle')
+  const [programClip, setProgramClip] = useState<{ id: string; label: string } | null>(null)
+  const programImageIdRef = useRef<string | null>(null)
+  const programClipIdRef = useRef<string | null>(null)
+  const programKindRef = useRef<'none' | 'video' | 'image'>('none')
   const [drafts, setDrafts] = useState<Draft[]>([])
   const [activeDraftId, setActiveDraftId] = useState<string | null>(null)
   const [draftName, setDraftName] = useState('')
   const [masterLevel, setMasterLevel] = useState(0)
+  const [isScrubbing, setIsScrubbing] = useState(false)
   const [keymap, setKeymap] = useState<KeyMap>(() => {
     try {
       const cached = localStorage.getItem('timeline-keymap')
@@ -408,9 +424,29 @@ function App() {
   const minimapRef = useRef<HTMLDivElement | null>(null)
 
   const trackIndex = useMemo(() => Object.fromEntries(tracks.map(t => [t.id, t])), [tracks])
+  const trackOrder = useMemo(() => Object.fromEntries(tracks.map((t, idx) => [t.id, idx])), [tracks])
   const anySolo = useMemo(() => tracks.some(t => t.solo), [tracks])
   const heroAsset = useMemo(() => assets.find(a => a.type.startsWith('video') || a.type.startsWith('image')), [assets])
   const primaryClip = useMemo(() => clips.find(c => c.id === selection.clipIds[0]), [clips, selection.clipIds])
+  const sourcePreview = useMemo(() => {
+    if (primaryClip) {
+      return {
+        id: primaryClip.id,
+        label: primaryClip.title,
+        type: primaryClip.assetType || '',
+        thumb: primaryClip.thumb || null,
+        waveform: primaryClip.waveform || null
+      }
+    }
+    if (!heroAsset) return null
+    return {
+      id: heroAsset.id,
+      label: heroAsset.name,
+      type: heroAsset.type,
+      thumb: heroAsset.thumb || null,
+      waveform: heroAsset.waveform || null
+    }
+  }, [primaryClip, heroAsset])
 
   useEffect(() => {
     if (!selectedBeatAsset) {
@@ -479,6 +515,19 @@ function App() {
   }, [analysisStatuses])
 
   useEffect(() => {
+    if (!isScrubbing) return
+    const stop = () => setIsScrubbing(false)
+    window.addEventListener('pointerup', stop)
+    window.addEventListener('pointercancel', stop)
+    window.addEventListener('blur', stop)
+    return () => {
+      window.removeEventListener('pointerup', stop)
+      window.removeEventListener('pointercancel', stop)
+      window.removeEventListener('blur', stop)
+    }
+  }, [isScrubbing])
+
+  useEffect(() => {
     const autosave = window.setInterval(() => {
       const draft: Draft = {
         id: 'autosave',
@@ -512,7 +561,36 @@ function App() {
   useEffect(() => {
     syncVideoToPlayhead(playhead)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playhead])
+  }, [playhead, clips, anySolo, trackIndex, trackOrder, playing])
+
+  useEffect(() => {
+    const vid = videoRef.current
+    if (!vid) return
+    const onLoadStart = () => {
+      if (programKindRef.current !== 'video') return
+      if (programStatus !== 'loading') setProgramStatus('loading')
+    }
+    const onLoaded = () => {
+      if (programKindRef.current !== 'video') return
+      if (programImageMode === 'poster') {
+        setProgramImage(null)
+        setProgramImageMode('none')
+      }
+      if (programStatus !== 'video') setProgramStatus('video')
+    }
+    const onError = () => {
+      if (programKindRef.current !== 'video') return
+      setProgramStatus('error')
+    }
+    vid.addEventListener('loadstart', onLoadStart)
+    vid.addEventListener('loadeddata', onLoaded)
+    vid.addEventListener('error', onError)
+    return () => {
+      vid.removeEventListener('loadstart', onLoadStart)
+      vid.removeEventListener('loadeddata', onLoaded)
+      vid.removeEventListener('error', onError)
+    }
+  }, [programImageMode, programStatus])
 
   useEffect(() => {
     let raf: number | null = null
@@ -538,6 +616,12 @@ function App() {
   // Keyboard: nudge, playback toggles, undo/redo, delete/duplicate
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      if (target) {
+        const tag = target.tagName
+        const isFormField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+        if (isFormField || target.isContentEditable) return
+      }
       const step = e.shiftKey ? 0.5 : 0.1
       const match = (binding: string) => {
         const key = binding.toLowerCase()
@@ -771,30 +855,105 @@ function App() {
   const syncVideoToPlayhead = (pos: number) => {
     const vid = videoRef.current
     if (!vid) return
-    const active = clips.find(c => {
-      if (!(c.assetType || '').startsWith('video')) return false
-      const tr = trackIndex[c.track]
-      if (!tr || tr.locked) return false
-      if (anySolo && !tr.solo) return false
-      if (!anySolo && tr.mute) return false
-      return c.url && pos >= c.start && pos <= c.start + c.duration
-    })
+    const active = clips
+      .filter(c => {
+        const type = c.assetType || ''
+        if (!(type.startsWith('video') || type.startsWith('image'))) return false
+        const tr = trackIndex[c.track]
+        if (!tr || tr.locked) return false
+        if (anySolo && !tr.solo) return false
+        if (!anySolo && tr.mute) return false
+        return c.url && pos >= c.start && pos <= c.start + c.duration
+      })
+      .sort((a, b) => {
+        const orderA = trackOrder[a.track] ?? 0
+        const orderB = trackOrder[b.track] ?? 0
+        if (orderA !== orderB) return orderB - orderA
+        const endA = a.start + a.duration
+        const endB = b.start + b.duration
+        return endB - endA
+      })[0]
     if (!active) {
+      programKindRef.current = 'none'
       vid.pause()
       activeVideoIdRef.current = null
+      if (programImageIdRef.current || programImageMode !== 'none') {
+        programImageIdRef.current = null
+        setProgramImage(null)
+        setProgramImageMode('none')
+      }
+      if (programStatus !== 'idle') setProgramStatus('idle')
+      if (programClipIdRef.current) {
+        programClipIdRef.current = null
+        setProgramClip(null)
+      }
       return
     }
+    if (programClipIdRef.current !== active.id) {
+      const trackName = trackIndex[active.track]?.name || active.track
+      const rangeStart = formatTime(active.start)
+      const rangeEnd = formatTime(active.start + active.duration)
+      programClipIdRef.current = active.id
+      setProgramClip({ id: active.id, label: `${trackName} · ${active.title} · ${rangeStart} - ${rangeEnd}` })
+    }
+    const isImage = (active.assetType || '').startsWith('image')
+    if (isImage) {
+      programKindRef.current = 'image'
+      if (programImageIdRef.current !== active.id) {
+        programImageIdRef.current = active.id
+        setProgramImage(active.thumb ?? active.url ?? null)
+      }
+      if (programImageMode !== 'still') setProgramImageMode('still')
+      if (programStatus !== 'image') setProgramStatus('image')
+      if (activeVideoIdRef.current) {
+        vid.pause()
+        activeVideoIdRef.current = null
+      }
+      return
+    }
+    if (programImageMode === 'still') {
+      programImageIdRef.current = null
+      setProgramImage(null)
+      setProgramImageMode('none')
+    }
+    programKindRef.current = 'video'
     if (activeVideoIdRef.current !== active.id) {
       vid.src = active.url || ''
       const offset = active.mediaOffset ?? 0
       vid.currentTime = Math.max(0, pos - active.start + offset)
-      vid.play().catch(() => { /* ignore autoplay blocks */ })
+      if (playing) {
+        vid.play().catch(() => { /* ignore autoplay blocks */ })
+      } else {
+        vid.pause()
+      }
       activeVideoIdRef.current = active.id
     } else {
       const offset = active.mediaOffset ?? 0
       const target = Math.max(0, pos - active.start + offset)
       if (Math.abs(vid.currentTime - target) > 0.05) vid.currentTime = target
-      if (vid.paused && playing) vid.play().catch(() => {})
+      if (playing) {
+        if (vid.paused) vid.play().catch(() => {})
+      } else if (!vid.paused) {
+        vid.pause()
+      }
+    }
+    const ready = vid.readyState >= 2
+    if (ready) {
+      if (programStatus !== 'video') setProgramStatus('video')
+    } else if (programStatus !== 'loading') {
+      setProgramStatus('loading')
+    }
+    const poster = active.thumb ?? null
+    if (poster && !ready) {
+      if (programImageIdRef.current !== active.id || programImageMode !== 'poster') {
+        programImageIdRef.current = active.id
+        setProgramImage(poster)
+        setProgramImageMode('poster')
+      }
+    } else if (programImageMode === 'poster') {
+      programImageIdRef.current = null
+      setProgramImage(null)
+      setProgramImageMode('none')
     }
   }
 
@@ -852,18 +1011,27 @@ function App() {
     setPlayhead(clampTime(m.time))
   }
 
-  const zoomToSelection = () => {
-    if (!selection.clipIds.length || !timelineRef.current?.parentElement) return
-    const selClips = clips.filter(c => selection.clipIds.includes(c.id))
-    if (!selClips.length) return
-    const start = Math.min(...selClips.map(c => c.start))
-    const end = Math.max(...selClips.map(c => c.start + c.duration))
+  const zoomToRange = (start: number, end: number) => {
+    if (!timelineRef.current?.parentElement) return
     const span = Math.max(0.6, end - start)
     const viewPx = timelineRef.current.parentElement.clientWidth || 960
     const targetZoom = clamp((viewPx - 120) / (span * 80), ZOOM_MIN, ZOOM_MAX)
     setZoom(targetZoom)
     const px = start * 80 * targetZoom
     timelineRef.current.parentElement.scrollLeft = Math.max(0, px - 60)
+  }
+
+  const zoomToSelection = () => {
+    if (!selection.clipIds.length) return
+    const selClips = clips.filter(c => selection.clipIds.includes(c.id))
+    if (!selClips.length) return
+    const start = Math.min(...selClips.map(c => c.start))
+    const end = Math.max(...selClips.map(c => c.start + c.duration))
+    zoomToRange(start, end)
+  }
+
+  const zoomToClip = (clip: Clip) => {
+    zoomToRange(clip.start, clip.start + clip.duration)
   }
 
   const handleAssetUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -972,6 +1140,8 @@ function App() {
   }
 
   const placeAssetOnTrack = (asset: Asset, trackId: string) => {
+    const track = tracks.find(t => t.id === trackId)
+    if (track && !isTrackCompatible(asset.type, track.type)) return
     setProject(prev => {
       const trackClips = prev.clips.filter(c => c.track === trackId)
       const end = trackClips.length ? Math.max(...trackClips.map(c => c.start + c.duration)) : 0
@@ -1493,7 +1663,7 @@ function App() {
                       <div className="muted small">{a.type || 'file'} · ~{a.duration.toFixed(1)}s</div>
                     </div>
                     <div className="asset-actions">
-                      {tracks.map(t => (
+                      {tracks.filter(t => isTrackCompatible(a.type, t.type)).map(t => (
                         <button key={t.id} className="ghost tiny" onClick={() => placeAssetOnTrack(a, t.id)}>
                           Send to {t.name}
                         </button>
@@ -1505,22 +1675,26 @@ function App() {
             </section>
 
             <section className="monitor-cluster">
-              <div className="monitor source">
-                <div className="monitor-head">
-                  <span>Source</span>
-                  <span className="muted small">{heroAsset?.name || 'No source selected'}</span>
-                </div>
-                <div
-                  className="monitor-body source-view"
-                  style={{ backgroundImage: heroAsset?.thumb ? `url(${heroAsset.thumb})` : undefined }}
+                <div className="monitor source">
+                  <div className="monitor-head">
+                    <span>Source</span>
+                    <span className="muted small" data-testid="source-label">{sourcePreview?.label || 'No source selected'}</span>
+                  </div>
+                  <div
+                  className={`monitor-body source-view ${primaryClip ? 'selected' : ''}`}
+                  data-testid="source-view"
+                  style={{ backgroundImage: sourcePreview?.thumb ? `url(${sourcePreview.thumb})` : undefined }}
                 >
-                  {!heroAsset && <div className="muted">Drop an asset to preview</div>}
-                  {heroAsset && heroAsset.type.startsWith('audio') && heroAsset.waveform && (
+                  {!sourcePreview && <div className="muted">Drop an asset to preview</div>}
+                  {sourcePreview && sourcePreview.type.startsWith('audio') && sourcePreview.waveform && (
                     <div className="waveform hero">
-                      {heroAsset.waveform.map((v, idx) => (
+                      {sourcePreview.waveform.map((v, idx) => (
                         <span key={idx} style={{ height: `${Math.max(6, v * 36)}px` }} />
                       ))}
                     </div>
+                  )}
+                  {sourcePreview && !sourcePreview.thumb && !sourcePreview.waveform && (
+                    <div className="muted small">{sourcePreview.type.split('/')[0] || 'media'}</div>
                   )}
                 </div>
               </div>
@@ -1531,9 +1705,32 @@ function App() {
                   <span className="muted small">Playhead {formatTime(playhead)}</span>
                 </div>
                 <div className="monitor-body program-view">
-                  <div className="video-frame">
-                    <video ref={videoRef} muted playsInline controls />
+                  <div className={`video-frame ${programImageMode === 'still' ? 'has-image' : ''} ${programImageMode === 'poster' ? 'has-poster' : ''}`}>
+                    <video ref={videoRef} muted playsInline data-testid="program-video" />
+                    {programImage && (
+                      <img
+                        src={programImage}
+                        alt={programImageMode === 'still' ? 'Program still' : 'Program poster'}
+                        className="program-still"
+                        data-testid={programImageMode === 'still' ? 'program-image' : 'program-poster'}
+                      />
+                    )}
+                    {programStatus === 'idle' && (
+                      <div className="program-placeholder" data-testid="program-status">No clip at playhead</div>
+                    )}
+                    {programStatus === 'loading' && (
+                      <div className="program-placeholder" data-testid="program-status">Loading preview…</div>
+                    )}
+                    {programStatus === 'error' && (
+                      <div className="program-placeholder" data-testid="program-status">Preview unavailable</div>
+                    )}
                     <div className="monitor-overlay">
+                      {programClip && (
+                        <div className="program-clip" data-testid="program-clip">{programClip.label}</div>
+                      )}
+                      {isScrubbing && (
+                        <div className="scrub-overlay" data-testid="scrub-overlay">Scrubbing · {formatTime(playhead)}</div>
+                      )}
                       <div className="time-badge">{formatTime(playhead)}</div>
                       <div className="safe-guides" />
                     </div>
@@ -1762,6 +1959,8 @@ function App() {
                   step={0.1}
                   value={playhead}
                   onChange={(e) => handleScrub(parseFloat(e.target.value))}
+                  data-testid="playhead-scrub"
+                  onPointerDown={() => setIsScrubbing(true)}
                 />
               </div>
             </div>
@@ -1814,6 +2013,7 @@ function App() {
                 {snap.position !== null && (
                   <div className="snap-ghost" style={{ left: snap.position * pxPerSec }} data-label={snap.label || ''} />
                 )}
+                <div className="playhead-line" style={{ left: playhead * pxPerSec }} />
                 {tracks.map((track, tIndex) => (
                   <div
                     key={track.id}
@@ -1870,6 +2070,7 @@ function App() {
                         if (!assetId) return
                         const asset = assets.find(a => a.id === assetId)
                         if (!asset) return
+                        if (!isTrackCompatible(asset.type, track.type)) return
                         const rect = e.currentTarget.getBoundingClientRect()
                         const x = e.clientX - rect.left + (timelineRef.current?.parentElement?.scrollLeft || 0)
                         const seconds = clampTime(x / pxPerSec)
@@ -1906,11 +2107,18 @@ function App() {
                               background: clip.color
                             }}
                             title={`${clip.title} (${formatTime(clip.start)} - ${formatTime(clip.start + clip.duration)})`}
+                            data-testid={`clip-${clip.id}`}
                           >
                             {clip.thumb && (
                               <span className="clip-thumb" style={{ backgroundImage: `url(${clip.thumb})` }} />
                             )}
+                            <span className="clip-kind">{isAudio ? 'A' : 'V'}</span>
                             <span className="clip-title">{clip.title}</span>
+                            <div className="clip-tooltip" data-testid={`clip-tooltip-${clip.id}`}>
+                              <div className="clip-tooltip-title">{clip.title}</div>
+                              <div>{formatTime(clip.start)} → {formatTime(clip.start + clip.duration)} · Dur {formatTime(clip.duration)}</div>
+                              <div className="muted small">Drag edges to trim · Alt+edge slip/slide</div>
+                            </div>
                             {isAudio && clip.waveform && (
                               <div className="clip-wave">
                                 {clip.waveform.map((v, idx) => (
@@ -1930,9 +2138,15 @@ function App() {
                             background: clip.color
                           }}
                           title={`${clip.title} (${formatTime(clip.start)} - ${formatTime(clip.start + clip.duration)})`}
+                          data-testid={`clip-${clip.id}`}
                           onMouseDown={(e) => {
                             e.stopPropagation()
                             startClipDrag(e, clip)
+                          }}
+                          onDoubleClick={(e) => {
+                            e.stopPropagation()
+                            setSelection({ clipIds: [clip.id], marquee: null })
+                            zoomToClip(clip)
                           }}
                           onClick={(e) => {
                             e.stopPropagation()
@@ -1944,7 +2158,13 @@ function App() {
                           {clip.thumb && (
                             <span className="clip-thumb" style={{ backgroundImage: `url(${clip.thumb})` }} />
                           )}
+                          <span className="clip-kind">{isAudio ? 'A' : 'V'}</span>
                           <span className="clip-title">{clip.title}</span>
+                          <div className="clip-tooltip" data-testid={`clip-tooltip-${clip.id}`}>
+                            <div className="clip-tooltip-title">{clip.title}</div>
+                            <div>{formatTime(clip.start)} → {formatTime(clip.start + clip.duration)} · Dur {formatTime(clip.duration)}</div>
+                            <div className="muted small">Drag edges to trim · Alt+edge slip/slide</div>
+                          </div>
                           {(clip.fadeIn ?? 0) > 0 && (
                             <span
                               className="fade-handle fade-in"
@@ -1965,7 +2185,8 @@ function App() {
                           {isAudio && clip.waveform && (
                             <div className="clip-wave">
                               {(() => {
-                                const bars = Math.max(16, Math.min(clip.waveform.length, Math.floor(clip.waveform.length * zoom / 1.2)))
+                                const zoomBoost = Math.max(1, Math.pow(zoom, 1.6))
+                                const bars = Math.max(16, Math.min(clip.waveform.length, Math.floor(clip.waveform.length * zoomBoost / 1.2)))
                                 const step = Math.max(1, Math.floor(clip.waveform.length / bars))
                                 return clip.waveform
                                   .filter((_, i) => i % step === 0)
@@ -2068,7 +2289,7 @@ function App() {
                   )}
                 </div>
                 <div className="asset-actions">
-                  {tracks.map(t => (
+                  {tracks.filter(t => isTrackCompatible(a.type, t.type)).map(t => (
                     <button key={t.id} className="ghost" onClick={() => placeAssetOnTrack(a, t.id)}>Send to {t.name}</button>
                   ))}
                 </div>
