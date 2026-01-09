@@ -8,3 +8,4 @@ glow_tmp/
 assets/
 web/node_modules/
 web/dist/
+web/yolov8n.pt
