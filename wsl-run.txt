@@ -1,7 +1,7 @@
 # Paste into WSL to start Beat timeline editing app
-sudo mkdir -p /mnt/d
-sudo mount -t drvfs D: /mnt/d || true
-cd "/mnt/d/coding projects/Beat timeline editing app/web"
+# Update REPO_ROOT to your local clone path.
+REPO_ROOT="/mnt/<drive>/coding-projects/Beat timeline editing app"
+cd "$REPO_ROOT/web"
 fuser -k 4178/tcp || true
 # first time only: npm install
 npm run dev -- --host --port 4178

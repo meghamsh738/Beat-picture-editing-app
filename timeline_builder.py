@@ -828,12 +828,12 @@ def ensure_sample_assets() -> Path:
 SAMPLE_ROOT = ensure_sample_assets()
 DEFAULTS.update(
     {
-        "MARKERS_CSV": r"C:\Users\megha\Documents\Timeline 1.csv",
-        "AUDIO_PATH": r"C:\Users\megha\Documents\Timeline 1.wav",
-        "IMAGES_DIRS": [r"C:\Users\megha\Downloads\WhatsApp Chat with Prachi Amin"],
-        "OUT_QUICK": r"C:\Users\megha\Documents\quick_preview.mp4",
-        "OUT_FULL": r"C:\Users\megha\Documents\final_export.mp4",
-        "PROJECT_JSON": r"C:\Users\megha\Documents\BeatTimelineProject.json",
+        "MARKERS_CSV": str(SAMPLE_ROOT / "markers.csv"),
+        "AUDIO_PATH": str(SAMPLE_ROOT / "audio.wav"),
+        "IMAGES_DIRS": [str(SAMPLE_ROOT / "images")],
+        "OUT_QUICK": str(SAMPLE_ROOT / "quick_preview.mp4"),
+        "OUT_FULL": str(SAMPLE_ROOT / "final_export.mp4"),
+        "PROJECT_JSON": str(SAMPLE_ROOT / "BeatTimelineProject.json"),
     }
 )
 
