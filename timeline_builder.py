@@ -77,6 +77,9 @@ DEFAULTS = {
     "QUICK_START_INTERVAL_INDEX": 0,
     "QUICK_DURATION_S": 20.0,
     "QUICK_N_INTERVALS": 10,
+    "RENDER_SPEED": "balanced",
+    "AUTO_FILL_LIMIT_ENABLED": False,
+    "AUTO_FILL_MARKER_INDEX": 1,
     "PROJECT_JSON": str(Path.home() / "timeline_project.json"),
     "LOOP_IMAGES": True,
     "IMPACT_KIND": "disabled",
@@ -152,6 +155,44 @@ WAVEFORM_STYLE_CHOICES = [
     ("Oscilloscope", "oscilloscope"),
     ("Wave Bars", "bars"),
 ]
+
+RENDER_SPEED_PROFILES = {
+    "balanced": {
+        "label": "Balanced",
+        "x264_preset": "faster",
+        "nvenc_preset": "p4",
+        "threads": 4,
+    },
+    "fast": {
+        "label": "Fast",
+        "x264_preset": "veryfast",
+        "nvenc_preset": "p2",
+        "threads": "auto",
+    },
+    "ultra": {
+        "label": "Ultra (draft)",
+        "x264_preset": "ultrafast",
+        "nvenc_preset": "p1",
+        "threads": "auto",
+    },
+}
+
+
+def resolve_render_speed(speed: str, cpu_count: Optional[int] = None) -> Dict[str, object]:
+    key = (speed or "").strip().lower()
+    if key not in RENDER_SPEED_PROFILES:
+        key = "balanced"
+    profile = RENDER_SPEED_PROFILES[key]
+    threads = profile["threads"]
+    if threads == "auto":
+        cpu = cpu_count if cpu_count is not None else (os.cpu_count() or 4)
+        threads = max(2, int(cpu))
+    return {
+        "key": key,
+        "x264_preset": profile["x264_preset"],
+        "nvenc_preset": profile["nvenc_preset"],
+        "threads": int(threads),
+    }
 
 LOG_EVENTS = os.environ.get("TIMELINE_DEBUG_LOG", "0") not in {"0", "", "false", "False"}
 
@@ -347,6 +388,8 @@ IMPACT_PRESETS = {
 }
 
 IMAGE_BUNDLE_MIME = "application/x-timeline-image-bundle"
+LIB_NORM_PATH_ROLE = Qt.UserRole + 1
+LIB_USED_FLAG_ROLE = Qt.UserRole + 2
 
 APP_STYLE_SHEET = """
 QMainWindow, QWidget {
@@ -373,6 +416,10 @@ QLabel#sectionTitle {
     font-size: 15px;
     font-weight: 600;
     color: #9ec5ff;
+}
+QLabel#hintLabel {
+    font-size: 12px;
+    color: #8ca0b8;
 }
 QLabel#imagePreview {
     background-color: #0b1118;
@@ -419,7 +466,10 @@ QComboBox QAbstractItemView {
 QTabWidget::pane {
     border: 1px solid #1f2a39;
     border-radius: 8px;
-    margin-top: 6px;
+    margin-top: 10px;
+}
+QTabWidget::tab-bar {
+    left: 8px;
 }
 QTabBar::tab {
     background-color: #0f141b;
@@ -427,12 +477,15 @@ QTabBar::tab {
     border: 1px solid #1f2a39;
     border-top-left-radius: 8px;
     border-top-right-radius: 8px;
-    padding: 6px 14px;
-    margin-right: 4px;
+    padding: 8px 18px;
+    margin-right: 8px;
 }
 QTabBar::tab:selected {
     background-color: #162232;
     color: #dfe8ff;
+}
+QTabBar::tab:!selected {
+    margin-top: 2px;
 }
 QListWidget::item:hover {
     background-color: #152033;
@@ -1494,6 +1547,7 @@ def render_quick_windowed(
     impact_duration,
     glow_opts: GlowOptions,
     wave_opts: WaveformOptions,
+    render_speed: str,
     progress_cb,
     status_cb,
     cancel_requested: Optional[Callable[[], bool]] = None,
@@ -1663,6 +1717,7 @@ def render_quick_windowed(
                 audio = _audio_with_volume(audio, db_to_gain(audio_gain_db))
             timeline = _clip_with_audio(timeline, audio)
 
+        speed_settings = resolve_render_speed(render_speed)
         logger = TkMoviePyLogger(lambda p: progress_cb(0.35 + 0.6 * p), cancel_requested=cancel_requested)
         timeline.write_videofile(
             out_path,
@@ -1670,8 +1725,8 @@ def render_quick_windowed(
             codec="libx264",
             audio_codec="aac",
             audio_bitrate="192k",
-            preset="faster",
-            threads=4,
+            preset=str(speed_settings["x264_preset"]),
+            threads=int(speed_settings["threads"]),
             temp_audiofile=str(Path(out_path).with_suffix(".temp-audio.m4a")),
             remove_temp=True,
             logger=logger,
@@ -1898,6 +1953,16 @@ def ensure_normalized_image_cached(
     return str(target)
 
 
+def _build_audio_input_args(audio_offset_s: float, audio_path: str) -> List[str]:
+    args: List[str] = []
+    if audio_offset_s > 0:
+        args += ["-itsoffset", f"{audio_offset_s:.3f}"]
+    elif audio_offset_s < 0:
+        args += ["-ss", f"{abs(audio_offset_s):.3f}"]
+    args += ["-i", audio_path]
+    return args
+
+
 def ffmpeg_full_export(
     ffmpeg_path: str,
     ffprobe_path: str,
@@ -1906,6 +1971,7 @@ def ffmpeg_full_export(
     frame_size: Tuple[int, int],
     audio_path: str,
     audio_gain_db: float,
+    audio_offset_s: float,
     use_nvenc: bool,
     use_shortest: bool,
     pre_normalize: bool,
@@ -1919,6 +1985,7 @@ def ffmpeg_full_export(
     impact_duration: float,
     glow_opts: GlowOptions,
     wave_opts: WaveformOptions,
+    render_speed: str,
     progress_cb,
     status_cb,
     cancel_requested: Optional[Callable[[], bool]] = None,
@@ -1938,6 +2005,7 @@ def ffmpeg_full_export(
         return variant
 
     W, H = frame_size
+    audio_offset_s = float(audio_offset_s or 0.0)
     tmpdir = Path(tempfile.mkdtemp(prefix="imgseq_"))
     concat_txt = tmpdir / "images_concat.txt"
     impact_kind = impact_kind or "disabled"
@@ -1964,7 +2032,7 @@ def ffmpeg_full_export(
     print(
         f"[CFG] FFmpeg='{ffmpeg_path}' | FFprobe='{ffprobe_path}' | NVENC={use_nvenc} | FPS={fps} | Size={W}x{H}"
     )
-    print(f"[PATHS] audio={_short(str(audio_path))}")
+    print(f"[PATHS] audio={_short(str(audio_path))} | audio_offset={audio_offset_s:.3f}s")
     print(f"[COUNTS] intervals={len(intervals)} | assignments={len(assignments)}")
 
     non_empty = sum(1 for a in assignments if a)
@@ -1996,7 +2064,16 @@ def ffmpeg_full_export(
     status_cb("Stage: normalize/glow cache")
     progress_cb(0.05)
     items: List[Tuple[str, float]] = []
-    if head_frames > 0:
+    include_head = head_frames > 0
+    if include_head and intervals:
+        try:
+            first_dur = max(0.0, (intervals[0][1] - intervals[0][0]) / float(fps))
+            first_is_black = not (assignments and assignments[0])
+            if first_is_black and abs(first_dur - head_dur) <= (1.5 / max(1, fps)):
+                include_head = False
+        except Exception:
+            include_head = head_frames > 0
+    if include_head:
         items.append((str(black_path), head_dur))
 
     preprocess_start = time.time()
@@ -2134,10 +2211,20 @@ def ffmpeg_full_export(
         af.append(f"volume={10**(audio_gain_db/20.0):.6f}")
     af_filter = ",".join(af) if af else "anull"
 
+    speed_settings = resolve_render_speed(render_speed)
     if use_nvenc:
-        vcodec = ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "19"]
+        vcodec = [
+            "-c:v",
+            "h264_nvenc",
+            "-preset",
+            str(speed_settings["nvenc_preset"]),
+            "-rc",
+            "vbr",
+            "-cq",
+            "19",
+        ]
     else:
-        vcodec = ["-c:v", "libx264", "-preset", "faster"]
+        vcodec = ["-c:v", "libx264", "-preset", str(speed_settings["x264_preset"])]
 
     status_cb("Stage: launching FFmpeg")
     progress_cb(0.3)
@@ -2153,9 +2240,8 @@ def ffmpeg_full_export(
         "concat",
         "-i",
         str(concat_txt),
-        "-i",
-        audio_path,
     ]
+    cmd += _build_audio_input_args(audio_offset_s, audio_path)
 
     if waveform_enabled and waveform_filter:
         overlay_y = max(0, H - waveform_height)
@@ -2269,6 +2355,55 @@ class WaveformOptions:
 
 
 @dataclass
+class HistoryEntry:
+    state: Dict[str, object]
+    signature: str
+
+
+class HistoryStack:
+    def __init__(self) -> None:
+        self._undo: List[HistoryEntry] = []
+        self._redo: List[HistoryEntry] = []
+
+    def _signature(self, state: Dict[str, object]) -> str:
+        return json.dumps(state, sort_keys=True, ensure_ascii=True, default=str)
+
+    def reset(self, state: Dict[str, object]) -> None:
+        entry = HistoryEntry(state=state, signature=self._signature(state))
+        self._undo = [entry]
+        self._redo = []
+
+    def push(self, state: Dict[str, object]) -> bool:
+        entry = HistoryEntry(state=state, signature=self._signature(state))
+        if self._undo and self._undo[-1].signature == entry.signature:
+            return False
+        self._undo.append(entry)
+        self._redo.clear()
+        return True
+
+    def undo(self) -> Optional[Dict[str, object]]:
+        if len(self._undo) <= 1:
+            return None
+        current = self._undo.pop()
+        self._redo.append(current)
+        return self._undo[-1].state
+
+    def redo(self) -> Optional[Dict[str, object]]:
+        if not self._redo:
+            return None
+        entry = self._redo.pop()
+        self._undo.append(entry)
+        return entry.state
+
+    @property
+    def can_undo(self) -> bool:
+        return len(self._undo) > 1
+
+    @property
+    def can_redo(self) -> bool:
+        return bool(self._redo)
+
+@dataclass
 class Segment:
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     name: str = ""
@@ -2300,6 +2435,104 @@ class Segment:
 
     def ensure_min_duration(self, min_duration: float) -> None:
         self.duration = max(min_duration, float(self.duration))
+
+
+def compute_marker_time(
+    marker_frames: List[int],
+    fps: int,
+    head_frames: int,
+    marker_index: int,
+) -> Optional[float]:
+    if not marker_frames:
+        return None
+    if marker_index < 1 or marker_index > len(marker_frames):
+        return None
+    fps = max(1, int(fps))
+    head_seconds = max(0, int(head_frames)) / float(fps)
+    return head_seconds + (marker_frames[marker_index - 1] / float(fps))
+
+
+def segments_within_autofill_limit(
+    segments: List[Segment],
+    limit_time: Optional[float],
+) -> List[int]:
+    if limit_time is None:
+        return [i for i, seg in enumerate(segments) if seg.kind == "image"]
+    indices: List[int] = []
+    for i, seg in enumerate(segments):
+        if seg.kind != "image":
+            continue
+        if seg.end <= limit_time + 1e-6:
+            indices.append(i)
+    return indices
+
+
+def compute_bundle_start_index(segments: List[Segment]) -> Tuple[Optional[int], bool]:
+    last_assigned = -1
+    for idx, seg in enumerate(segments):
+        if seg.kind == "image" and seg.image_path:
+            last_assigned = idx
+
+    def next_empty(start: int) -> Optional[int]:
+        for i in range(max(0, start), len(segments)):
+            seg = segments[i]
+            if seg.kind != "image":
+                continue
+            if seg.image_path:
+                continue
+            return i
+        return None
+
+    preferred = next_empty(last_assigned + 1)
+    if preferred is not None:
+        return preferred, False
+    fallback = next_empty(0)
+    if fallback is None:
+        return None, False
+    return fallback, True
+
+
+def resolve_autofill_images(
+    selected_paths: List[str],
+    all_images: List[Path],
+) -> List[Path]:
+    if selected_paths:
+        available = {str(p) for p in all_images}
+        chosen = [Path(p) for p in selected_paths if p in available]
+        if chosen:
+            return chosen
+    return list(all_images)
+
+
+def unassign_image_from_segments(
+    segments: List[Segment],
+    path: str,
+    normalizer: Callable[[str], str],
+) -> int:
+    if not path:
+        return 0
+    if not segments:
+        return 0
+    try:
+        target = normalizer(path)
+    except Exception:
+        target = path
+    if not target:
+        return 0
+    removed = 0
+    for seg in segments:
+        if seg.kind != "image" or not seg.image_path:
+            continue
+        try:
+            seg_norm = normalizer(seg.image_path)
+        except Exception:
+            seg_norm = seg.image_path
+        if seg_norm != target:
+            continue
+        seg.image_path = ""
+        seg.kind = "image"
+        removed += 1
+    return removed
 
 
 def timeline_to_render_segments(segments: List[Segment]) -> List[Dict[str, object]]:
@@ -2424,6 +2657,7 @@ class FolderListWidget(QtWidgets.QListWidget):
 class ThumbnailListWidget(QtWidgets.QListWidget):
     imageActivated = Signal(str)
     imageDoubleClicked = Signal(str)
+    imageContextRequested = Signal(str, QtCore.QPoint)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2471,6 +2705,7 @@ class ThumbnailListWidget(QtWidgets.QListWidget):
         item = QtWidgets.QListWidgetItem(Path(path).name)
         item.setToolTip(str(path))
         item.setData(Qt.UserRole, str(path))
+        item.setData(LIB_USED_FLAG_ROLE, False)
         exists = Path(path).exists()
         placeholder = "Missing" if not exists else "No\nImg"
         item.setIcon(QtGui.QIcon(get_thumbnail(str(path), 120, 90, placeholder)))
@@ -2512,6 +2747,22 @@ class ThumbnailListWidget(QtWidgets.QListWidget):
     def _emit_double_clicked(self, item) -> None:
         if item:
             self.imageDoubleClicked.emit(item.data(Qt.UserRole))
+
+    def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:  # noqa: D401
+        item = self.itemAt(event.pos())
+        if not item:
+            event.ignore()
+            return
+        path = item.data(Qt.UserRole)
+        if not path:
+            event.ignore()
+            return
+        if not item.isSelected():
+            self.clearSelection()
+            item.setSelected(True)
+        self.setCurrentItem(item)
+        self.imageContextRequested.emit(path, event.globalPos())
+        event.accept()
 
     def scrollTo(self, index, hint=QtWidgets.QAbstractItemView.EnsureVisible) -> None:  # noqa: D401
         try:
@@ -2659,6 +2910,7 @@ class ThumbnailListWidget(QtWidgets.QListWidget):
 class ImageLibraryWidget(QtWidgets.QTabWidget):
     imageActivated = Signal(str)
     imageDoubleClicked = Signal(str)
+    imageContextRequested = Signal(str, QtCore.QPoint)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2668,6 +2920,7 @@ class ImageLibraryWidget(QtWidgets.QTabWidget):
         self._desired_tab_index = 0
         self._block_selection = False
         self._pending_restore_path = ''
+        self._pending_usage_highlight: Optional[Tuple[set[str], Callable[[str], str]]] = None
         self._last_widget: Optional[QtWidgets.QWidget] = None
 
         self._loader_timer = QtCore.QTimer(self)
@@ -2680,6 +2933,7 @@ class ImageLibraryWidget(QtWidgets.QTabWidget):
         widget.setObjectName(f"Library[{len(self._lists)}]")
         widget.imageActivated.connect(self._relay_activated)
         widget.imageDoubleClicked.connect(self._relay_double_clicked)
+        widget.imageContextRequested.connect(self._relay_context_menu)
         widget.setProperty('folder_path', folder)
         return widget
 
@@ -2762,13 +3016,16 @@ class ImageLibraryWidget(QtWidgets.QTabWidget):
     def _finish_images_population(self) -> None:
         restore_path = self._pending_restore_path
         self._pending_restore_path = ''
+        restored = False
         if restore_path:
             restored = self.select_image(restore_path, center=False)
             if restored:
+                self._apply_pending_usage_highlight()
                 return
         if self.count():
             idx = max(0, min(self._desired_tab_index, self.count() - 1))
             self.setCurrentIndex(idx)
+        self._apply_pending_usage_highlight()
 
     def _handle_tab_changed(self, index: int) -> None:
         if self._last_widget and isinstance(self._last_widget, QtWidgets.QListWidget):
@@ -2787,6 +3044,9 @@ class ImageLibraryWidget(QtWidgets.QTabWidget):
     def _relay_double_clicked(self, path: str) -> None:
         self.imageDoubleClicked.emit(path)
 
+    def _relay_context_menu(self, path: str, global_pos: QtCore.QPoint) -> None:
+        self.imageContextRequested.emit(path, global_pos)
+
     def current_image_path(self) -> str:
         widget = self.currentWidget()
         if isinstance(widget, ThumbnailListWidget):
@@ -2797,6 +3057,16 @@ class ImageLibraryWidget(QtWidgets.QTabWidget):
             if item:
                 return item.data(Qt.UserRole)
         return ''
+
+    def selected_image_paths(self) -> List[str]:
+        widget = self.currentWidget()
+        if isinstance(widget, QtWidgets.QListWidget):
+            items = widget.selectedItems()
+            if not items:
+                return []
+            items.sort(key=lambda it: widget.row(it))
+            return [it.data(Qt.UserRole) for it in items if it.data(Qt.UserRole)]
+        return []
 
     def _remember_scroll(self, widget: QtWidgets.QListWidget) -> None:
         if not isinstance(widget, QtWidgets.QListWidget):
@@ -2861,11 +3131,54 @@ class ImageLibraryWidget(QtWidgets.QTabWidget):
             list_widget.scrollToItem(item, QtWidgets.QAbstractItemView.PositionAtCenter)
         return True
 
+    def _apply_pending_usage_highlight(self) -> None:
+        if not self._pending_usage_highlight:
+            return
+        used_norm, normalizer = self._pending_usage_highlight
+        self._pending_usage_highlight = None
+        self.apply_usage_highlights(used_norm, normalizer)
+
+    def apply_usage_highlights(
+        self,
+        used_norm: set[str],
+        normalizer: Callable[[str], str],
+    ) -> None:
+        if self._pending_batches or not self._path_map:
+            self._pending_usage_highlight = (set(used_norm), normalizer)
+            return
+        highlight = QtGui.QColor("#1a2f46")
+        for path, (_, item) in self._path_map.items():
+            norm = item.data(LIB_NORM_PATH_ROLE)
+            if not norm:
+                norm = normalizer(path)
+                item.setData(LIB_NORM_PATH_ROLE, norm)
+            is_used = norm in used_norm
+            prev = bool(item.data(LIB_USED_FLAG_ROLE))
+            if prev == is_used:
+                continue
+            if is_used:
+                item.setBackground(QtGui.QBrush(highlight))
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
+            else:
+                item.setBackground(QtGui.QBrush())
+                font = item.font()
+                font.setBold(False)
+                item.setFont(font)
+            item.setData(LIB_USED_FLAG_ROLE, is_used)
+
 
 class ImagePreviewDialog(QtWidgets.QDialog):
     def __init__(self, image_path: str, parent=None):
         super().__init__(parent)
         self.setWindowTitle(Path(image_path).name)
+        flags = self.windowFlags()
+        flags &= ~Qt.MSWindowsFixedSizeDialogHint
+        flags |= Qt.Window | Qt.WindowMaximizeButtonHint | Qt.WindowMinimizeButtonHint
+        self.setWindowFlags(flags)
+        self.setSizeGripEnabled(True)
+        self.setMinimumSize(640, 360)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self._pixmap = QtGui.QPixmap(image_path)
         self._first_show = True
@@ -2888,7 +3201,12 @@ class ImagePreviewDialog(QtWidgets.QDialog):
         super().showEvent(event)
         if self._first_show:
             self._first_show = False
-            self.showMaximized()
+            screen = QtGui.QGuiApplication.primaryScreen()
+            if screen:
+                geom = screen.availableGeometry()
+                target_w = max(900, int(geom.width() * 0.85))
+                target_h = max(600, int(geom.height() * 0.85))
+                self.resize(target_w, target_h)
         self._update_scaled_pixmap()
 
     def _update_scaled_pixmap(self) -> None:
@@ -3087,6 +3405,13 @@ class TimelineApp(QtWidgets.QMainWindow):
         self._main_splitter: Optional[QtWidgets.QSplitter] = None
         self._timeline_splitter: Optional[QtWidgets.QSplitter] = None
         self._nvenc_cache: Dict[str, bool] = {}
+        self._history = HistoryStack()
+        self._history_block = False
+        self._duration_history_pending = False
+        self._duration_history_timer = QtCore.QTimer(self)
+        self._duration_history_timer.setSingleShot(True)
+        self._duration_history_timer.timeout.connect(self._clear_duration_history_pending)
+        self._used_image_cache: set[str] = set()
 
         self._build_ui()
         self._apply_config(self.cfg)
@@ -3108,11 +3433,21 @@ class TimelineApp(QtWidgets.QMainWindow):
             self._set_status("Loaded sample demo project.")
         else:
             self._set_status("Ready.")
+        self._reset_history()
 
     # --- UI construction -------------------------------------------------
     def _build_ui(self) -> None:
         self.setWindowTitle("Beat Image Timeline Builder — Timeline Edition")
+        flags = self.windowFlags()
+        flags &= ~Qt.MSWindowsFixedSizeDialogHint
+        flags &= ~Qt.FramelessWindowHint
+        flags |= Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint | Qt.WindowMinMaxButtonsHint
+        flags |= Qt.WindowMaximizeButtonHint | Qt.WindowMinimizeButtonHint | Qt.WindowCloseButtonHint
+        self.setWindowFlags(flags)
         self.resize(1480, 900)
+        self.setMinimumSize(980, 640)
+        self.setMaximumSize(16777215, 16777215)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self._create_actions()
         self._create_menus()
         self._create_toolbar()
@@ -3126,6 +3461,9 @@ class TimelineApp(QtWidgets.QMainWindow):
         self.save_project_action = QtGui.QAction("Save Project", self)
         self.save_project_as_action = QtGui.QAction("Save Project As…", self)
         self.exit_action = QtGui.QAction("Exit", self)
+
+        self.undo_action = QtGui.QAction("Undo", self)
+        self.redo_action = QtGui.QAction("Redo", self)
 
         self.load_csv_action = QtGui.QAction("Load Markers CSV…", self)
         self.add_images_dir_action = QtGui.QAction("Add Images Folder…", self)
@@ -3144,6 +3482,10 @@ class TimelineApp(QtWidgets.QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(self.exit_action)
 
+        edit_menu = self.menuBar().addMenu("Edit")
+        edit_menu.addAction(self.undo_action)
+        edit_menu.addAction(self.redo_action)
+
         assets_menu = self.menuBar().addMenu("Assets")
         assets_menu.addAction(self.load_csv_action)
         assets_menu.addAction(self.add_images_dir_action)
@@ -3161,6 +3503,9 @@ class TimelineApp(QtWidgets.QMainWindow):
         toolbar.addAction(self.open_project_action)
         toolbar.addAction(self.save_project_action)
         toolbar.addSeparator()
+        toolbar.addAction(self.undo_action)
+        toolbar.addAction(self.redo_action)
+        toolbar.addSeparator()
         toolbar.addAction(self.load_csv_action)
         toolbar.addAction(self.add_images_dir_action)
         toolbar.addAction(self.auto_fill_action)
@@ -3175,7 +3520,10 @@ class TimelineApp(QtWidgets.QMainWindow):
 
     def _create_status_bar(self) -> None:
         status = QtWidgets.QStatusBar()
+        status.setSizeGripEnabled(True)
         self.setStatusBar(status)
+        size_grip = QtWidgets.QSizeGrip(status)
+        status.addPermanentWidget(size_grip)
         self.status_label = QtWidgets.QLabel("Ready.")
         self.progress_bar = QtWidgets.QProgressBar()
         self.progress_bar.setMaximumWidth(200)
@@ -3299,6 +3647,26 @@ class TimelineApp(QtWidgets.QMainWindow):
         buttons.addWidget(self.make_black_btn)
         buttons.addWidget(self.auto_fill_btn)
         layout.addLayout(buttons)
+
+        autofill_row = QtWidgets.QHBoxLayout()
+        autofill_label = QtWidgets.QLabel("Auto-fill limit")
+        autofill_label.setObjectName("hintLabel")
+        self.auto_fill_limit_check = QtWidgets.QCheckBox("Stop at marker")
+        self.auto_fill_marker_spin = QtWidgets.QSpinBox()
+        self.auto_fill_marker_spin.setRange(1, 1)
+        self.auto_fill_marker_spin.setValue(1)
+        self.auto_fill_marker_spin.setEnabled(False)
+        self.auto_fill_marker_label = QtWidgets.QLabel("No markers loaded")
+        self.auto_fill_marker_label.setObjectName("hintLabel")
+        self.auto_fill_selection_hint = QtWidgets.QLabel("Tip: select images in the library to auto-fill just those.")
+        self.auto_fill_selection_hint.setObjectName("hintLabel")
+        autofill_row.addWidget(autofill_label)
+        autofill_row.addWidget(self.auto_fill_limit_check)
+        autofill_row.addWidget(self.auto_fill_marker_spin)
+        autofill_row.addWidget(self.auto_fill_marker_label)
+        autofill_row.addStretch()
+        layout.addLayout(autofill_row)
+        layout.addWidget(self.auto_fill_selection_hint)
 
         prop_box = QtWidgets.QGroupBox("Segment Properties")
         form = QtWidgets.QFormLayout(prop_box)
@@ -3474,6 +3842,17 @@ class TimelineApp(QtWidgets.QMainWindow):
         self.pre_norm_check = QtWidgets.QCheckBox("Pre-normalize images (recommended)")
         form.addRow(self.pre_norm_check)
 
+        self.render_speed_combo = QtWidgets.QComboBox()
+        for key, profile in RENDER_SPEED_PROFILES.items():
+            self.render_speed_combo.addItem(str(profile["label"]), key)
+        form.addRow("Render speed", self.render_speed_combo)
+        self.render_speed_hint = QtWidgets.QLabel(
+            "Speed tips: reduce frame size, disable glow/impact/waveform, or enable NVENC."
+        )
+        self.render_speed_hint.setWordWrap(True)
+        self.render_speed_hint.setObjectName("hintLabel")
+        form.addRow(self.render_speed_hint)
+
         pre_row = QtWidgets.QWidget()
         pre_layout = QtWidgets.QHBoxLayout(pre_row)
         pre_layout.setContentsMargins(0, 0, 0, 0)
@@ -3610,6 +3989,11 @@ class TimelineApp(QtWidgets.QMainWindow):
         self.save_project_as_action.triggered.connect(self.save_project_as)
         self.exit_action.triggered.connect(self.close)
 
+        self.undo_action.setShortcuts([QtGui.QKeySequence.Undo])
+        self.redo_action.setShortcuts([QtGui.QKeySequence.Redo, QtGui.QKeySequence("Ctrl+Shift+Z")])
+        self.undo_action.triggered.connect(self.undo_last)
+        self.redo_action.triggered.connect(self.redo_last)
+
         self.load_csv_action.triggered.connect(self.load_markers_dialog)
         self.add_images_dir_action.triggered.connect(self.add_image_dir_dialog)
         self.rescan_images_action.triggered.connect(self.rescan_images)
@@ -3624,6 +4008,7 @@ class TimelineApp(QtWidgets.QMainWindow):
 
         self.image_library.imageActivated.connect(self._on_library_image_activated)
         self.image_library.imageDoubleClicked.connect(self._on_library_image_double_clicked)
+        self.image_library.imageContextRequested.connect(self._on_library_context_menu)
 
         self.timeline_list.itemSelectionChanged.connect(self._on_timeline_selection_changed)
         self.timeline_list.orderChanged.connect(self._handle_timeline_order_changed)
@@ -3636,6 +4021,8 @@ class TimelineApp(QtWidgets.QMainWindow):
         self.delete_segment_btn.clicked.connect(self.delete_selected_segments)
         self.make_black_btn.clicked.connect(self.convert_selected_to_black)
         self.auto_fill_btn.clicked.connect(self.auto_fill_segments)
+        self.auto_fill_limit_check.toggled.connect(self._update_autofill_controls)
+        self.auto_fill_marker_spin.valueChanged.connect(self._update_autofill_marker_label)
 
         self.assign_selected_btn.clicked.connect(self.assign_selected_image_to_segment)
         self.clear_image_btn.clicked.connect(self.clear_segment_image)
@@ -3657,6 +4044,132 @@ class TimelineApp(QtWidgets.QMainWindow):
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)
         self.statusBar().showMessage(message, 4000)
+
+    def _collect_used_image_paths(self) -> set[str]:
+        used: set[str] = set()
+        for seg in self.segments:
+            if seg.kind != "image" or not seg.image_path:
+                continue
+            norm = self._normalize_compare_path(seg.image_path)
+            if norm:
+                used.add(norm)
+        return used
+
+    def _update_library_usage_highlights(self, *, force: bool = False) -> None:
+        used = self._collect_used_image_paths()
+        if not force and used == self._used_image_cache:
+            return
+        self._used_image_cache = set(used)
+        if hasattr(self, "image_library"):
+            self.image_library.apply_usage_highlights(used, self._normalize_compare_path)
+
+    def _serialize_history_state(self) -> Dict[str, object]:
+        return {
+            "segments": [seg.to_dict() for seg in self.segments],
+            "marker_frames": list(self.marker_frames),
+            "marker_frames_raw": list(self.marker_frames_raw),
+            "head_frames": int(self.head_frames),
+        }
+
+    def _apply_history_state(self, state: Dict[str, object]) -> None:
+        self._history_block = True
+        try:
+            self.marker_frames = [max(0, int(x)) for x in state.get("marker_frames", [])]
+            self.marker_frames_raw = [int(x) for x in state.get("marker_frames_raw", [])]
+            self.head_frames = int(state.get("head_frames", 0))
+            self.segments = [Segment.from_dict(d) for d in state.get("segments", [])]
+            self._refresh_timeline(preserve_selection=False)
+            self._update_autofill_controls()
+        finally:
+            self._history_block = False
+
+    def _reset_history(self) -> None:
+        self._history.reset(self._serialize_history_state())
+        self._update_history_actions()
+
+    def _push_history(self) -> None:
+        if self._history_block:
+            return
+        pushed = self._history.push(self._serialize_history_state())
+        if pushed:
+            self._update_history_actions()
+
+    def _update_history_actions(self) -> None:
+        if hasattr(self, "undo_action"):
+            self.undo_action.setEnabled(self._history.can_undo)
+        if hasattr(self, "redo_action"):
+            self.redo_action.setEnabled(self._history.can_redo)
+
+    def _clear_duration_history_pending(self) -> None:
+        self._duration_history_pending = False
+
+    def undo_last(self) -> None:
+        state = self._history.undo()
+        if state is None:
+            return
+        self._apply_history_state(state)
+        self._set_status("Undo")
+        self._update_history_actions()
+
+    def redo_last(self) -> None:
+        state = self._history.redo()
+        if state is None:
+            return
+        self._apply_history_state(state)
+        self._set_status("Redo")
+        self._update_history_actions()
+
+    def _auto_fill_limit_time(self) -> Optional[float]:
+        if not getattr(self, "auto_fill_limit_check", None):
+            return None
+        if not self.auto_fill_limit_check.isChecked():
+            return None
+        if not self.marker_frames:
+            return None
+        marker_index = min(max(1, int(self.auto_fill_marker_spin.value())), len(self.marker_frames))
+        return compute_marker_time(self.marker_frames, self.fps_spin.value(), self.head_frames, marker_index)
+
+    def _update_autofill_marker_label(self) -> None:
+        if not getattr(self, "auto_fill_marker_label", None):
+            return
+        if not self.marker_frames:
+            self.auto_fill_marker_label.setText("No markers loaded")
+            return
+        marker_index = min(max(1, int(self.auto_fill_marker_spin.value())), len(self.marker_frames))
+        limit_time = compute_marker_time(self.marker_frames, self.fps_spin.value(), self.head_frames, marker_index)
+        if limit_time is None:
+            self.auto_fill_marker_label.setText("No markers loaded")
+            return
+        if not self.auto_fill_limit_check.isChecked():
+            total = len(segments_within_autofill_limit(self.segments, None))
+            self.auto_fill_marker_label.setText(f"All segments ({total})")
+            return
+        count = len(segments_within_autofill_limit(self.segments, limit_time))
+        marker_tc = seconds_to_tc(limit_time, max(1, self.fps_spin.value()))
+        suffix = "segment" if count == 1 else "segments"
+        self.auto_fill_marker_label.setText(f"Ends @ {marker_tc} · fills {count} {suffix}")
+
+    def _update_autofill_controls(self) -> None:
+        if not getattr(self, "auto_fill_limit_check", None):
+            return
+        has_markers = bool(self.marker_frames)
+        self.auto_fill_limit_check.setEnabled(has_markers)
+        if not has_markers:
+            self.auto_fill_marker_spin.blockSignals(True)
+            self.auto_fill_marker_spin.setRange(1, 1)
+            self.auto_fill_marker_spin.setValue(1)
+            self.auto_fill_marker_spin.blockSignals(False)
+            self.auto_fill_marker_spin.setEnabled(False)
+            self.auto_fill_marker_label.setText("No markers loaded")
+            return
+        max_marker = max(1, len(self.marker_frames))
+        current = min(max(1, int(self.auto_fill_marker_spin.value())), max_marker)
+        self.auto_fill_marker_spin.blockSignals(True)
+        self.auto_fill_marker_spin.setRange(1, max_marker)
+        self.auto_fill_marker_spin.setValue(current)
+        self.auto_fill_marker_spin.blockSignals(False)
+        self.auto_fill_marker_spin.setEnabled(self.auto_fill_limit_check.isChecked())
+        self._update_autofill_marker_label()
 
     def _current_glow_options(self) -> GlowOptions:
         color_value = self.glow_color_combo.currentData() if hasattr(self, "glow_color_combo") else "#00f6ff"
@@ -3787,8 +4300,10 @@ class TimelineApp(QtWidgets.QMainWindow):
         self.audio_edit.clear()
         self.quick_out_edit.clear()
         self.full_out_edit.clear()
+        self._update_autofill_controls()
         self._refresh_timeline(preserve_selection=False)
         self._set_status("New project")
+        self._reset_history()
 
     def load_markers_dialog(self) -> None:
         if self._busy:
@@ -3814,6 +4329,7 @@ class TimelineApp(QtWidgets.QMainWindow):
                 )
                 return
             raw_frames = sorted(set(raw_frames))
+            self._push_history()
             self.marker_frames_raw = raw_frames
 
             base_text = self.tc_base_edit.text().strip()
@@ -3855,6 +4371,7 @@ class TimelineApp(QtWidgets.QMainWindow):
                     Segment(name=f"Segment {idx:03d}", duration=dur, kind="image")
                 )
             self._refresh_timeline(preserve_selection=False)
+            self._update_autofill_controls()
             self._set_status(
                 f"Loaded {len(self.marker_frames)} markers → {len(intervals)} intervals"
             )
@@ -3932,6 +4449,7 @@ class TimelineApp(QtWidgets.QMainWindow):
         current = self._current_segment()
         if current and current.kind == "image" and current.image_path:
             self.image_library.select_image(current.image_path, center=False)
+        self._update_library_usage_highlights(force=True)
 
     def _cleanup_image_scan(self) -> None:
         if self._image_scan_thread:
@@ -4061,6 +4579,43 @@ class TimelineApp(QtWidgets.QMainWindow):
         candidate = resolved if resolved.exists() else Path(path)
         dialog = ImagePreviewDialog(str(candidate), self)
         dialog.exec()
+
+    def _on_library_context_menu(self, path: str, global_pos: QtCore.QPoint) -> None:
+        if not path:
+            return
+        matches = self._find_segment_indices_for_image(path)
+        count = len(matches)
+        menu = QtWidgets.QMenu(self)
+        label_action = QtGui.QAction(Path(path).name, menu)
+        label_action.setEnabled(False)
+        menu.addAction(label_action)
+        menu.addSeparator()
+        suffix = f" ({count})" if count else ""
+        unassign_action = QtGui.QAction(f"Unassign from timeline{suffix}", menu)
+        unassign_action.setEnabled(count > 0)
+        menu.addAction(unassign_action)
+        chosen = menu.exec(global_pos)
+        if chosen == unassign_action:
+            self._unassign_image_from_timeline(path)
+
+    def _unassign_image_from_timeline(self, path: str) -> None:
+        if not path:
+            return
+        if not self.segments:
+            return
+        count = len(self._find_segment_indices_for_image(path))
+        if count == 0:
+            self._set_status(f"No timeline clips found for {Path(path).name}.")
+            return
+        self._push_history()
+        removed = unassign_image_from_segments(
+            self.segments, path, self._normalize_compare_path
+        )
+        if removed:
+            self._refresh_timeline(preserve_selection=True)
+            self._set_status(
+                f"Unassigned {removed} segment(s) for {Path(path).name}."
+            )
 
     def _auto_fill_default_images(self) -> None:
         if not self.segments or not self.images:
@@ -4196,6 +4751,7 @@ class TimelineApp(QtWidgets.QMainWindow):
             self.timeline_list.setUpdatesEnabled(True)
 
         self._on_timeline_selection_changed()
+        self._update_library_usage_highlights()
 
     def _refresh_timeline_items_only(self) -> None:
         fps = max(1, self.fps_spin.value())
@@ -4226,6 +4782,7 @@ class TimelineApp(QtWidgets.QMainWindow):
             f"Total: {current:.3f}s ({seconds_to_tc(current, fps)})"
         )
         self._refresh_timeline_items_only()
+        self._update_autofill_marker_label()
 
     def _normalize_segment_image_paths(self) -> None:
         if not _is_running_in_wsl():
@@ -4337,6 +4894,7 @@ class TimelineApp(QtWidgets.QMainWindow):
         resolved = self._resolve_path(path)
         if resolved.exists():
             path = str(resolved)
+        self._push_history()
         seg.kind = "image"
         seg.image_path = path
         self._refresh_segment_item(seg.id)
@@ -4349,6 +4907,7 @@ class TimelineApp(QtWidgets.QMainWindow):
             self._suppress_library_activation = False
         self._set_status(f"Assigned {Path(path).name} to {seg.name}")
         self._notify_duplicate_image_usage(path)
+        self._update_library_usage_highlights()
 
     def _bundle_insert_index(self) -> int:
         last = -1
@@ -4376,12 +4935,13 @@ class TimelineApp(QtWidgets.QMainWindow):
                 self, "Folder bundle", "Load or create segments before assigning images."
             )
             return
-        start_idx = self._bundle_insert_index()
-        if start_idx >= len(self.segments):
+        start_idx, used_fallback = compute_bundle_start_index(self.segments)
+        if start_idx is None:
             QtWidgets.QMessageBox.information(
                 self, "Folder bundle", "No empty image segments remain in the timeline."
             )
             return
+        self._push_history()
         assigned = 0
         cursor = start_idx
         for candidate in cleaned:
@@ -4405,7 +4965,8 @@ class TimelineApp(QtWidgets.QMainWindow):
         if target_row >= 0:
             self.timeline_list.setCurrentRow(target_row)
         note = " (ran out of segments)" if assigned < len(cleaned) else ""
-        self._set_status(f"Added {assigned} image(s) from folder bundle{note}")
+        fallback_note = " (filled earlier empty slots)" if used_fallback else ""
+        self._set_status(f"Added {assigned} image(s) from folder bundle{note}{fallback_note}")
 
     def _notify_duplicate_image_usage(self, path: str) -> None:
         if not path:
@@ -4464,11 +5025,13 @@ class TimelineApp(QtWidgets.QMainWindow):
         seg = self._current_segment()
         if not seg:
             return
+        self._push_history()
         seg.image_path = ""
         if self.segment_kind_combo.currentText().lower() == "image":
             seg.kind = "image"
         self._refresh_segment_item(seg.id)
         self._load_segment_into_form(seg)
+        self._update_library_usage_highlights()
 
     def _clear_render_cache(self) -> None:
         if self._busy:
@@ -4505,6 +5068,7 @@ class TimelineApp(QtWidgets.QMainWindow):
         seg = self._current_segment()
         if not seg:
             return
+        self._push_history()
         seg.name = self.segment_name_edit.text().strip()
         self._refresh_segment_item(seg.id)
 
@@ -4514,6 +5078,10 @@ class TimelineApp(QtWidgets.QMainWindow):
         seg = self._current_segment()
         if not seg:
             return
+        if not self._duration_history_pending:
+            self._push_history()
+            self._duration_history_pending = True
+            self._duration_history_timer.start(700)
         seg.duration = max(value, 0.01)
         self._recalculate_segment_timings()
         self._refresh_segment_item(seg.id)
@@ -4525,11 +5093,13 @@ class TimelineApp(QtWidgets.QMainWindow):
         seg = self._current_segment()
         if not seg:
             return
+        self._push_history()
         seg.kind = "image" if index == 0 else "black"
         if seg.kind != "image":
             seg.image_path = ""
         self._refresh_segment_item(seg.id)
         self._load_segment_into_form(seg)
+        self._update_library_usage_highlights()
 
     def split_selected_segment(self) -> None:
         seg = self._current_segment()
@@ -4556,6 +5126,7 @@ class TimelineApp(QtWidgets.QMainWindow):
         )
         if not ok:
             return
+        self._push_history()
         idx = self.segments.index(seg)
         seg.duration = value
         new_seg = Segment(
@@ -4572,6 +5143,7 @@ class TimelineApp(QtWidgets.QMainWindow):
         seg = self._current_segment()
         if not seg:
             return
+        self._push_history()
         idx = self.segments.index(seg)
         new_seg = Segment(
             name=f"{seg.name} (dup)",
@@ -4587,11 +5159,15 @@ class TimelineApp(QtWidgets.QMainWindow):
         ids = self._current_segment_ids()
         if not ids:
             return
+        self._push_history()
         self.segments = [seg for seg in self.segments if seg.id not in ids]
         self._refresh_timeline(preserve_selection=False)
 
     def convert_selected_to_black(self) -> None:
         ids = self._current_segment_ids()
+        if not ids:
+            return
+        self._push_history()
         for seg in self.segments:
             if seg.id in ids:
                 seg.kind = "black"
@@ -4605,20 +5181,46 @@ class TimelineApp(QtWidgets.QMainWindow):
         if not self.images:
             QtWidgets.QMessageBox.information(self, "Auto-fill", "No images available.")
             return
-        intervals, _ = timeline_to_intervals(self.segments, max(1, self.fps_spin.value()))
+        self._push_history()
+        self._recalculate_segment_timings()
+        fps = max(1, self.fps_spin.value())
+        intervals, _ = timeline_to_intervals(self.segments, fps)
         prior = [seg.image_path for seg in self.segments]
+        limit_time = self._auto_fill_limit_time()
+        limit_indices = (
+            set(segments_within_autofill_limit(self.segments, limit_time))
+            if limit_time is not None
+            else None
+        )
+        selected_paths = self.image_library.selected_image_paths()
+        image_pool = resolve_autofill_images(selected_paths, self.images)
+        using_selection = bool(selected_paths) and image_pool != list(self.images)
         try:
             assigned = assign_images(
                 intervals,
-                self.images,
+                image_pool,
                 loop=self.loop_images_check.isChecked(),
                 prior_assign=prior,
             )
-            for seg, path in zip(self.segments, assigned):
-                if seg.kind == "image":
-                    seg.image_path = path
+            updated = 0
+            for idx, (seg, path) in enumerate(zip(self.segments, assigned)):
+                if seg.kind != "image":
+                    continue
+                if limit_indices is not None and idx not in limit_indices:
+                    continue
+                seg.image_path = path
+                updated += 1
             self._refresh_timeline()
-            self._set_status("Auto-filled image assignments")
+            if limit_time is not None:
+                marker_idx = min(max(1, int(self.auto_fill_marker_spin.value())), len(self.marker_frames))
+                marker_tc = seconds_to_tc(limit_time, fps)
+                selection_note = f" using {len(image_pool)} selected image(s)" if using_selection else ""
+                self._set_status(
+                    f"Auto-filled {updated} segment(s){selection_note} through marker {marker_idx} ({marker_tc})"
+                )
+            else:
+                selection_note = f" (used {len(image_pool)} selected image(s))" if using_selection else ""
+                self._set_status(f"Auto-filled image assignments{selection_note}")
         except Exception as exc:  # noqa: broad-except
             QtWidgets.QMessageBox.critical(self, "Auto-fill error", str(exc))
 
@@ -4629,6 +5231,7 @@ class TimelineApp(QtWidgets.QMainWindow):
         mapping = {seg.id: seg for seg in self.segments}
         if len(ordered_ids) != len(self.segments):
             return
+        self._push_history()
         self.segments = [mapping[sid] for sid in ordered_ids if sid in mapping]
         self._refresh_timeline()
 
@@ -4717,6 +5320,9 @@ class TimelineApp(QtWidgets.QMainWindow):
             "QUICK_START_INTERVAL_INDEX": int(self.quick_index_spin.value()),
             "QUICK_DURATION_S": float(self.quick_dur_spin.value()),
             "QUICK_N_INTERVALS": int(self.quick_n_spin.value()),
+            "RENDER_SPEED": self.render_speed_combo.currentData() or "balanced",
+            "AUTO_FILL_LIMIT_ENABLED": self.auto_fill_limit_check.isChecked(),
+            "AUTO_FILL_MARKER_INDEX": int(self.auto_fill_marker_spin.value()),
             "IMAGES_DIRS": list(self.image_dirs),
             "LOOP_IMAGES": self.loop_images_check.isChecked(),
             "IMPACT_KIND": self.impact_kind_combo.currentData() or "disabled",
@@ -4773,6 +5379,12 @@ class TimelineApp(QtWidgets.QMainWindow):
         self.quick_index_spin.setValue(int(cfg.get("QUICK_START_INTERVAL_INDEX", 0)))
         self.quick_dur_spin.setValue(float(cfg.get("QUICK_DURATION_S", 20.0)))
         self.quick_n_spin.setValue(int(cfg.get("QUICK_N_INTERVALS", 10)))
+        speed = str(cfg.get("RENDER_SPEED", DEFAULTS.get("RENDER_SPEED", "balanced")))
+        idx = self.render_speed_combo.findData(speed)
+        if idx >= 0:
+            self.render_speed_combo.setCurrentIndex(idx)
+        self.auto_fill_limit_check.setChecked(bool(cfg.get("AUTO_FILL_LIMIT_ENABLED", False)))
+        self.auto_fill_marker_spin.setValue(int(cfg.get("AUTO_FILL_MARKER_INDEX", 1)))
         self.loop_images_check.setChecked(bool(cfg.get("LOOP_IMAGES", True)))
         glow_enabled = bool(cfg.get("FX_GLOW_ENABLED", DEFAULTS["FX_GLOW_ENABLED"]))
         self.glow_enable_check.setChecked(glow_enabled)
@@ -4814,6 +5426,7 @@ class TimelineApp(QtWidgets.QMainWindow):
         dirs = cfg.get("IMAGES_DIRS", [])
         if isinstance(dirs, list):
             self.image_dirs = [str(d) for d in dirs]
+        self._update_autofill_controls()
 
     # --- Project save/load ----------------------------------------------
     def _serialize_project(self) -> Dict[str, object]:
@@ -4913,7 +5526,9 @@ class TimelineApp(QtWidgets.QMainWindow):
         self._update_image_dirs_list()
         self.rescan_images()
         self._refresh_timeline(preserve_selection=False)
+        self._update_autofill_controls()
         self._set_status(f"Loaded project ← {path}")
+        self._reset_history()
 
     # --- Rendering -------------------------------------------------------
     def ensure_ready_to_render(self) -> bool:
@@ -5001,6 +5616,7 @@ class TimelineApp(QtWidgets.QMainWindow):
         impact_duration = float(self.impact_duration_spin.value()) if self.impact_enable_check.isChecked() else 0.0
         glow_opts = self._current_glow_options()
         wave_opts = self._current_waveform_options()
+        render_speed = str(self.render_speed_combo.currentData() or "balanced")
         task_args = (
             out_path,
             ffmpeg_path,
@@ -5018,6 +5634,7 @@ class TimelineApp(QtWidgets.QMainWindow):
             impact_duration,
             glow_opts,
             wave_opts,
+            render_speed,
         )
         self._start_worker(render_quick_windowed, *task_args)
         self._set_status("Rendering quick preview…")
@@ -5058,6 +5675,7 @@ class TimelineApp(QtWidgets.QMainWindow):
         impact_duration = float(self.impact_duration_spin.value()) if self.impact_enable_check.isChecked() else 0.0
         glow_opts = self._current_glow_options()
         wave_opts = self._current_waveform_options()
+        render_speed = str(self.render_speed_combo.currentData() or "balanced")
         pre_normalize = self.pre_norm_check.isChecked()
         task_args = (
             ffmpeg_path,
@@ -5067,6 +5685,7 @@ class TimelineApp(QtWidgets.QMainWindow):
             frame_size,
             audio_path,
             float(self.audio_gain_spin.value()),
+            float(self.audio_offset_spin.value()),
             nvenc_enabled,
             self.use_shortest_check.isChecked(),
             pre_normalize,
@@ -5080,6 +5699,7 @@ class TimelineApp(QtWidgets.QMainWindow):
             impact_duration,
             glow_opts,
             wave_opts,
+            render_speed,
         )
         self._start_worker(ffmpeg_full_export, *task_args)
         self._set_status("Exporting full video…")

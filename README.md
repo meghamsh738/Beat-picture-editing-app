@@ -1,8 +1,13 @@
-# Timeline Builder (fastfx)
+# Beat Picture Editing App (Timeline Builder)
 
-A desktop-style timeline prototype built with React + Vite. Features snapping (markers/edges/gaps), ripple moves/trims, loop ranges, asset ingest with waveforms/thumbs, zoom/pan controls, and export presets. Playwright smoke tests ship with recorded video/screenshot outputs.
+This repo ships a desktop-style timeline builder (PySide6) plus a React + Vite prototype. Features include snapping (markers/edges/gaps), ripple moves/trims, loop ranges, asset ingest with waveforms/thumbs, zoom/pan controls, beat detection, text-on-beat overlays, and export presets. Playwright smoke tests ship with recorded video/screenshot outputs.
 
-Quick start
+Desktop app (Python)
+- `bash run_timeline.sh`
+  - Creates `.venv` + installs `requirements.txt`
+  - Launches the timeline builder UI
+
+Web quick start
 - `cd web`
 - `npm install`
 - `npm run dev -- --host --port 4178` then open http://localhost:4178
@@ -10,6 +15,7 @@ Quick start
 Captures (see `web/screenshots/`)
 - Edit overview: `web/screenshots/edit-overview.png`
 - Assets tab (with free sample image + tone): `web/screenshots/assets.png`
+- Asset context menu: `web/screenshots/asset-context.png`
 - Export tab: `web/screenshots/export.png`
 - Run video: `web/screenshots/timeline-run.webm`
 
@@ -34,9 +40,9 @@ Current feature set
 
 ## Screenshots
 
-| Edit overview | Assets tab | Export tab |
-| --- | --- | --- |
-| ![Edit overview](web/screenshots/edit-overview.png) | ![Assets](web/screenshots/assets.png) | ![Export](web/screenshots/export.png) |
+| Edit overview | Assets tab | Asset context | Export tab |
+| --- | --- | --- | --- |
+| ![Edit overview](web/screenshots/edit-overview.png) | ![Assets](web/screenshots/assets.png) | ![Asset context](web/screenshots/asset-context.png) | ![Export](web/screenshots/export.png) |
 
 More details
 See `web/README.md` for feature notes, shortcuts, and file map.

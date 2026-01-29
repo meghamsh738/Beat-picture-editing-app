@@ -5,6 +5,7 @@ import './App.css'
 
 type Clip = {
   id: string
+  assetId?: string
   title: string
   track: string
   color: string
@@ -92,11 +93,11 @@ const DEFAULT_TRACKS: TrackState[] = [
 ]
 
 const DEFAULT_CLIPS: Clip[] = [
-  { id: 'c1', title: 'Sample 5s MP4', track: 'v1', color: '#4ade80', start: 0, duration: 5, url: '/samples/sample-5s.mp4', assetType: 'video/mp4', thumb: '/samples/sample-photo.jpg', mediaDuration: 5, gain: 1, fadeIn: 0.12, fadeOut: 0.12 },
+  { id: 'c1', assetId: 'asset-mp4', title: 'Sample 5s MP4', track: 'v1', color: '#4ade80', start: 0, duration: 5, url: '/samples/sample-5s.mp4', assetType: 'video/mp4', thumb: '/samples/sample-photo.jpg', mediaDuration: 5, gain: 1, fadeIn: 0.12, fadeOut: 0.12 },
   { id: 'c2', title: 'Scene A', track: 'v1', color: '#60a5fa', start: 6.5, duration: 8, gain: 1, fadeIn: 0.12, fadeOut: 0.12 },
   { id: 'c3', title: 'Lower Third', track: 'v2', color: '#f472b6', start: 6.7, duration: 4, gain: 1, fadeIn: 0.12, fadeOut: 0.12 },
-  { id: 'c4', title: 'Free Tone', track: 'a1', color: '#fbbf24', start: 2, duration: 10, url: '/samples/free-tone-10s.wav', assetType: 'audio/wav', waveform: Array.from({ length: 90 }, (_, i) => 0.28 + 0.38 * Math.sin(i * 0.34) ** 2), mediaDuration: 10, gain: 1, fadeIn: 0.2, fadeOut: 0.4 },
-  { id: 'c5', title: 'Sample WAV', track: 'a2', color: '#a78bfa', start: 4, duration: 3.2, url: '/samples/sample-3s.wav', assetType: 'audio/wav', waveform: Array.from({ length: 72 }, (_, i) => 0.25 + 0.3 * Math.sin(i * 0.28 + 0.4) ** 2), mediaDuration: 3.2, gain: 1, fadeIn: 0.12, fadeOut: 0.12 }
+  { id: 'c4', assetId: 'asset-tone', title: 'Free Tone', track: 'a1', color: '#fbbf24', start: 2, duration: 10, url: '/samples/free-tone-10s.wav', assetType: 'audio/wav', waveform: Array.from({ length: 90 }, (_, i) => 0.28 + 0.38 * Math.sin(i * 0.34) ** 2), mediaDuration: 10, gain: 1, fadeIn: 0.2, fadeOut: 0.4 },
+  { id: 'c5', assetId: 'asset-wav', title: 'Sample WAV', track: 'a2', color: '#a78bfa', start: 4, duration: 3.2, url: '/samples/sample-3s.wav', assetType: 'audio/wav', waveform: Array.from({ length: 72 }, (_, i) => 0.25 + 0.3 * Math.sin(i * 0.28 + 0.4) ** 2), mediaDuration: 3.2, gain: 1, fadeIn: 0.12, fadeOut: 0.12 }
 ]
 
 const DEFAULT_MARKERS: Marker[] = [
@@ -172,6 +173,12 @@ const isTrackCompatible = (assetType: string, trackType: Track['type']) => {
   if (assetType.startsWith('audio')) return trackType === 'audio'
   if (assetType.startsWith('video') || assetType.startsWith('image')) return trackType === 'video'
   return true
+}
+
+const isClipFromAsset = (asset: Asset, clip: Clip) => {
+  if (clip.assetId && clip.assetId === asset.id) return true
+  if (asset.url && clip.url && clip.url === asset.url) return true
+  return clip.title === asset.name && clip.assetType === asset.type
 }
 
 const loadMediaDuration = (file: File): Promise<number> => new Promise(resolve => {
@@ -377,6 +384,7 @@ function App() {
   const [beatStatus, setBeatStatus] = useState<{ state: 'idle' | 'analyzing' | 'ready' | 'error'; message?: string; assetId?: string }>({ state: 'idle' })
   const [selectedBeatAsset, setSelectedBeatAsset] = useState<string | null>(null)
   const [analysisStatuses, setAnalysisStatuses] = useState<Record<string, 'pending' | 'processing' | 'cached' | 'done' | 'error'>>({})
+  const [assetMenu, setAssetMenu] = useState<{ assetId: string; x: number; y: number } | null>(null)
   const pendingFilesRef = useRef<Map<string, File>>(new Map())
   const processingAnalysisRef = useRef(false)
   const analysisStatusRef = useRef<Record<string, 'pending' | 'processing' | 'cached' | 'done' | 'error'>>({})
@@ -417,6 +425,8 @@ function App() {
   const playStartTimeRef = useRef<number>(0)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const activeVideoIdRef = useRef<string | null>(null)
+  const assetMenuRef = useRef<HTMLDivElement | null>(null)
+  const assetMenuActionRef = useRef<'unassign' | null>(null)
 
   const timelineRef = useRef<HTMLDivElement | null>(null)
   const [viewWindow, setViewWindow] = useState({ start: 0, duration: 8 })
@@ -427,6 +437,16 @@ function App() {
   const trackOrder = useMemo(() => Object.fromEntries(tracks.map((t, idx) => [t.id, idx])), [tracks])
   const anySolo = useMemo(() => tracks.some(t => t.solo), [tracks])
   const heroAsset = useMemo(() => assets.find(a => a.type.startsWith('video') || a.type.startsWith('image')), [assets])
+  const assetMenuAsset = useMemo(() => {
+    if (!assetMenu) return null
+    return assets.find(a => a.id === assetMenu.assetId) || null
+  }, [assetMenu, assets])
+  const assetMenuClipCount = useMemo(() => {
+    if (!assetMenu) return 0
+    const asset = assets.find(a => a.id === assetMenu.assetId)
+    if (!asset) return 0
+    return clips.filter(c => isClipFromAsset(asset, c)).length
+  }, [assetMenu, assets, clips])
   const primaryClip = useMemo(() => clips.find(c => c.id === selection.clipIds[0]), [clips, selection.clipIds])
   const sourcePreview = useMemo(() => {
     if (primaryClip) {
@@ -513,6 +533,43 @@ function App() {
   useEffect(() => {
     analysisStatusRef.current = analysisStatuses
   }, [analysisStatuses])
+
+  useEffect(() => {
+    if (!assetMenu) return
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null
+      if (!target || !assetMenuRef.current) {
+        setAssetMenu(null)
+        return
+      }
+      if (assetMenuRef.current.contains(target)) return
+      setAssetMenu(null)
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setAssetMenu(null)
+    }
+    window.addEventListener('pointerdown', handlePointerDown)
+    window.addEventListener('keydown', handleKeyDown)
+    const raf = window.requestAnimationFrame(() => {
+      assetMenuRef.current?.querySelector('button')?.focus()
+    })
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown)
+      window.removeEventListener('keydown', handleKeyDown)
+      window.cancelAnimationFrame(raf)
+    }
+  }, [assetMenu])
+
+  useEffect(() => {
+    if (!assetMenu) {
+      assetMenuActionRef.current = null
+      return
+    }
+    if (assetMenuActionRef.current === 'unassign' && assetMenuClipCount === 0) {
+      assetMenuActionRef.current = null
+      setAssetMenu(null)
+    }
+  }, [assetMenu, assetMenuClipCount])
 
   useEffect(() => {
     if (!isScrubbing) return
@@ -1056,6 +1113,38 @@ function App() {
     e.target.value = ''
   }
 
+  const handleAssetContextMenu = useCallback((event: React.MouseEvent, asset: Asset) => {
+    if (!asset.type.startsWith('image')) {
+      setAssetMenu(null)
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    const menuWidth = 220
+    const menuHeight = 140
+    const maxX = Math.max(12, window.innerWidth - menuWidth - 12)
+    const maxY = Math.max(12, window.innerHeight - menuHeight - 12)
+    const nextX = clamp(event.clientX, 12, maxX)
+    const nextY = clamp(event.clientY, 12, maxY)
+    setAssetMenu({ assetId: asset.id, x: nextX, y: nextY })
+  }, [setAssetMenu])
+
+  const unassignAssetFromTimeline = useCallback((assetId: string) => {
+    const asset = assets.find(a => a.id === assetId)
+    if (!asset) return
+    const removedIds = new Set(clips.filter(c => isClipFromAsset(asset, c)).map(c => c.id))
+    if (!removedIds.size) return
+    setProject(prev => ({ ...prev, clips: prev.clips.filter(c => !isClipFromAsset(asset, c)) }))
+    setSelection(prev => ({ ...prev, clipIds: prev.clipIds.filter(id => !removedIds.has(id)) }))
+    pushCheckpoint()
+  }, [assets, clips, pushCheckpoint, setProject, setSelection])
+
+  const triggerAssetUnassign = useCallback((assetId: string) => {
+    if (assetMenuActionRef.current === 'unassign') return
+    assetMenuActionRef.current = 'unassign'
+    unassignAssetFromTimeline(assetId)
+  }, [unassignAssetFromTimeline])
+
   const runNextAnalysis = useCallback(async () => {
     if (processingAnalysisRef.current) return
     const pendingEntry = Object.entries(analysisStatusRef.current).find(([, status]) => status === 'pending')
@@ -1148,6 +1237,7 @@ function App() {
       const color = CLIP_COLORS[(prev.clips.length) % CLIP_COLORS.length]
       const newClip: Clip = {
         id: `${asset.id}-clip`,
+        assetId: asset.id,
         title: asset.name,
         track: trackId,
         color,
@@ -1640,10 +1730,12 @@ function App() {
                     key={a.id}
                     className="asset-card"
                     draggable
+                    data-testid={`asset-card-${a.id}`}
                     onDragStart={(e) => {
                       e.dataTransfer.setData('text/asset-id', a.id)
                       e.dataTransfer.effectAllowed = 'copy'
                     }}
+                    onContextMenu={(e) => handleAssetContextMenu(e, a)}
                   >
                     <div
                       className="asset-thumb-frame"
@@ -2079,6 +2171,7 @@ function App() {
                           ...prev,
                           clips: [...prev.clips, {
                             id: `${asset.id}-drop-${Date.now()}`,
+                            assetId: asset.id,
                             title: asset.name,
                             track: track.id,
                             color,
@@ -2262,10 +2355,12 @@ function App() {
                 key={a.id}
                 className="asset-row"
                 draggable
+                data-testid={`asset-row-${a.id}`}
                 onDragStart={(e) => {
                   e.dataTransfer.setData('text/asset-id', a.id)
                   e.dataTransfer.effectAllowed = 'copy'
                 }}
+                onContextMenu={(e) => handleAssetContextMenu(e, a)}
               >
                 <div className="asset-meta">
                   <strong className="asset-title">{a.name}</strong>
@@ -2322,6 +2417,36 @@ function App() {
             </div>
           )}
           <p>Preset renderer uses a lightweight ffmpeg.wasm path when available; cancel anytime.</p>
+        </div>
+      )}
+      {assetMenu && assetMenuAsset && (
+        <div
+          className="asset-context-menu"
+          role="menu"
+          ref={assetMenuRef}
+          style={{ left: assetMenu.x, top: assetMenu.y }}
+          data-testid="asset-context-menu"
+        >
+          <div className="asset-context-label">{assetMenuAsset.name}</div>
+          <button
+            type="button"
+            className="asset-context-action"
+            role="menuitem"
+            disabled={assetMenuClipCount === 0}
+            onPointerDown={(event) => {
+              if (event.button !== 0) return
+              triggerAssetUnassign(assetMenu.assetId)
+            }}
+            onClick={() => {
+              triggerAssetUnassign(assetMenu.assetId)
+            }}
+            data-testid="asset-unassign"
+          >
+            Unassign from timeline{assetMenuClipCount ? ` (${assetMenuClipCount})` : ''}
+          </button>
+          {assetMenuClipCount === 0 && (
+            <div className="asset-context-hint muted small">No timeline clips to remove</div>
+          )}
         </div>
       )}
     </div>
